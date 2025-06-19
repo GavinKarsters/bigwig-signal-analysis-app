@@ -254,6 +254,7 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
     plt.tight_layout()
     return fig
 
+
 def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered):
     """Create line plot with separate subplots for each group - PRESERVING BED FILE ORDER"""
     
@@ -287,8 +288,8 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
         ncols = 4
         nrows = (n_groups + 3) // 4
     
-    # Create figure with subplots
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 4*nrows + 1), sharey=True)
+    # Create figure with subplots - INCREASED HEIGHT FOR BETTER SPACING
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 4*nrows + 1.5), sharey=True)
     
     # Handle single subplot case
     if n_groups == 1:
@@ -351,18 +352,24 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
     for idx in range(n_groups, len(axes)):
         axes[idx].set_visible(False)
     
-    # Set overall title
+    # Set overall title with better positioning
     if len(bigwig_names) == 1:
         title = f'{bigwig_names[0]} Signal Profiles Across Uploaded BED Files'
     else:
         title = f'Signal Profile Comparison Across Uploaded BED Files\n(Solid=1st BigWig, Dashed=2nd BigWig, etc.)'
     
-    fig.suptitle(title, fontsize=16, fontweight='bold', y=0.95)
+    # IMPROVED TITLE POSITIONING
+    fig.suptitle(title, fontsize=14, fontweight='bold', y=0.98)
     
+    # BETTER SPACING ADJUSTMENT
     plt.tight_layout()
-    plt.subplots_adjust(top=0.88)
+    plt.subplots_adjust(top=0.85 if len(bigwig_names) > 1 else 0.90)
     
     return fig
+
+    
+    
+    
 
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
