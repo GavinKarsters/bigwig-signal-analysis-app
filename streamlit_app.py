@@ -478,16 +478,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
     
     return fig
 
-def clear_analysis_cache():
-    """Clear cached analysis data"""
-    keys_to_clear = [
-        'analysis_complete', 'signals_data', 'profile_data', 
-        'group_names', 'bed_names_ordered', 'analysis_params'
-    ]
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
-
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
     st.markdown("""
@@ -516,8 +506,7 @@ def main():
                 min_value=0.1,
                 value=100.0,
                 step=0.1,
-                help="Maximum value for boxplot y-axis",
-                key="y_max_input"
+                help="Maximum value for boxplot y-axis"
             )
             
             extend_bp = st.number_input(
@@ -539,12 +528,6 @@ def main():
             step=100,
             help="Randomly sample if BED file has more regions"
         )
-        
-        # Clear cache button
-        if st.button("🗑️ Clear Analysis Cache", help="Clear cached analysis data to start fresh"):
-            clear_analysis_cache()
-            st.success("Cache cleared!")
-            st.rerun()
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -555,8 +538,7 @@ def main():
             "Choose BigWig files:",
             type=['bw', 'bigwig'],
             accept_multiple_files=True,
-            help="Upload 1-4 BigWig files. Multiple files will be compared.",
-            on_change=clear_analysis_cache  # Clear cache when files change
+            help="Upload 1-4 BigWig files. Multiple files will be compared."
         )
         
         if bigwig_files:
@@ -587,8 +569,7 @@ def main():
             "Choose BED files:",
             type=['bed'],
             accept_multiple_files=True,
-            help="Upload BED files in the order you want them to appear in plots",
-            on_change=clear_analysis_cache  # Clear cache when files change
+            help="Upload BED files in the order you want them to appear in plots"
         )
         
         if bed_files:
@@ -596,28 +577,8 @@ def main():
             for i, bed_file in enumerate(bed_files, 1):
                 st.write(f"{i}. {bed_file.name}")
     
-    # Check if analysis is needed
-    analysis_needed = (
-        not st.session_state.get('analysis_complete', False) or
-        st.session_state.get('analysis_params', {}) != {
-            'plot_type': plot_type,
-            'extend_bp': extend_bp if plot_type in ["Boxplot", "Both"] else None,
-            'max_regions': max_regions,
-            'bigwig_files': [f.name for f in bigwig_files] if bigwig_files else [],
-            'bed_files': [f.name for f in bed_files] if bed_files else [],
-            'replicate_groups': replicate_groups
-        }
-    )
-    
-    # Analysis button - only show if analysis is needed
-    if analysis_needed:
-        analysis_button = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
-    else:
-        st.success("✅ Analysis complete! Adjust settings above to update plots.")
-        analysis_button = False
-    
-    # Run analysis if button clicked and conditions met
-    if analysis_button:
+    # Analysis button
+    if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
         if not bigwig_files:
             st.error("Please upload at least one BigWig file")
             return
@@ -674,7 +635,6 @@ def main():
                 status_text = st.empty()
                 
                 # Extract signals
-                signals_data = None
                 if plot_type in ["Boxplot", "Both"]:
                     status_text.text("Extracting signals for boxplots...")
                     
@@ -688,7 +648,6 @@ def main():
                                 signals_dict[bed_name] = signals
                         signals_data.append(signals_dict)
                 
-                profile_data = None
                 if plot_type in ["Line plot", "Both"]:
                     status_text.text("Extracting profiles for line plots...")
                     
@@ -706,92 +665,71 @@ def main():
                                 profile_dict[bed_name] = profile
                         profile_data.append(profile_dict)
                 
-                # Cache the results in session state
-                st.session_state.analysis_complete = True
-                st.session_state.signals_data = signals_data
-                st.session_state.profile_data = profile_data
-                st.session_state.group_names = group_names
-                st.session_state.bed_names_ordered = bed_names_ordered
-                st.session_state.analysis_params = {
-                    'plot_type': plot_type,
-                    'extend_bp': extend_bp if plot_type in ["Boxplot", "Both"] else None,
-                    'max_regions': max_regions,
-                    'bigwig_files': [f.name for f in bigwig_files],
-                    'bed_files': [f.name for f in bed_files],
-                    'replicate_groups': replicate_groups
-                }
-                
                 progress_bar.progress(1.0)
-                status_text.text("✅ Analysis complete! Generating plots...")
+                status_text.text("Creating plots...")
+                
+                # Create plots
+                if plot_type in ["Boxplot", "Both"]:
+                    st.header("📊 Boxplot Results")
+                    try:
+                        if len(group_names) == 1:
+                            signals_dict = signals_data[0]
+                        else:
+                            signals_dict = signals_data
+                            
+                        fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
+                        
+                        st.pyplot(fig_box)
+                        plt.close(fig_box)
+                        
+                        # Download button for boxplot
+                        buf = io.BytesIO()
+                        fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
+                        fig_box.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+                        buf.seek(0)
+                        plt.close(fig_box)
+                        
+                        st.download_button(
+                            label="📥 Download Boxplot",
+                            data=buf,
+                            file_name="signal_boxplot.png",
+                            mime="image/png"
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"Error creating boxplot: {e}")
+                
+                if plot_type in ["Line plot", "Both"]:
+                    st.header("📈 Line Plot Results")
+                    try:
+                        fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
+                        
+                        if fig_line:
+                            st.pyplot(fig_line)
+                            plt.close(fig_line)
+                            
+                            # Download button for line plot
+                            buf = io.BytesIO()
+                            fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
+                            fig_line.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+                            buf.seek(0)
+                            plt.close(fig_line)
+                            
+                            st.download_button(
+                                label="📥 Download Line Plot",
+                                data=buf,
+                                file_name="signal_lineplot.png",
+                                mime="image/png"
+                            )
+                        
+                    except Exception as e:
+                        st.error(f"Error creating line plot: {e}")
+                
+                status_text.text("✅ Analysis complete!")
                 
             except Exception as e:
                 st.error(f"An error occurred during analysis: {e}")
                 st.exception(e)
-                return
-    
-    # Generate plots from cached data
-    if st.session_state.get('analysis_complete', False):
-        signals_data = st.session_state.get('signals_data')
-        profile_data = st.session_state.get('profile_data')
-        group_names = st.session_state.get('group_names')
-        bed_names_ordered = st.session_state.get('bed_names_ordered')
-        
-        # Create plots
-        if (plot_type in ["Boxplot", "Both"]) and signals_data:
-            st.header("📊 Boxplot Results")
-            try:
-                if len(group_names) == 1:
-                    signals_dict = signals_data[0]
-                else:
-                    signals_dict = signals_data
-                    
-                fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
-                
-                st.pyplot(fig_box)
-                plt.close(fig_box)
-                
-                # Download button for boxplot
-                buf = io.BytesIO()
-                fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
-                fig_box.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-                buf.seek(0)
-                plt.close(fig_box)
-                
-                st.download_button(
-                    label="📥 Download Boxplot",
-                    data=buf,
-                    file_name="signal_boxplot.png",
-                    mime="image/png"
-                )
-                
-            except Exception as e:
-                st.error(f"Error creating boxplot: {e}")
-        
-        if (plot_type in ["Line plot", "Both"]) and profile_data:
-            st.header("📈 Line Plot Results")
-            try:
-                fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
-                
-                if fig_line:
-                    st.pyplot(fig_line)
-                    plt.close(fig_line)
-                    
-                    # Download button for line plot
-                    buf = io.BytesIO()
-                    fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
-                    fig_line.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-                    buf.seek(0)
-                    plt.close(fig_line)
-                    
-                    st.download_button(
-                        label="📥 Download Line Plot",
-                        data=buf,
-                        file_name="signal_lineplot.png",
-                        mime="image/png"
-                    )
-                
-            except Exception as e:
-                st.error(f"Error creating line plot: {e}")
 
 if __name__ == "__main__":
     main()
