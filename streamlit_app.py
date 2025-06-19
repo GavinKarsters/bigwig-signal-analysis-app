@@ -10,6 +10,7 @@ import os
 import tempfile
 import io
 from pathlib import Path
+import time
 
 # Set page config
 st.set_page_config(
@@ -495,6 +496,10 @@ def main():
     - **Replicate Averaging**: Automatically average biological replicates during signal extraction
     """)
     
+    # Initialize analysis state
+    if 'analysis_running' not in st.session_state:
+        st.session_state.analysis_running = False
+    
     # Sidebar for file uploads and settings
     with st.sidebar:
         st.header("🔧 Settings")
@@ -503,7 +508,8 @@ def main():
         plot_type = st.selectbox(
             "Select plot type:",
             ["Boxplot", "Line plot", "Both"],
-            help="Choose the type of visualization"
+            help="Choose the type of visualization",
+            disabled=st.session_state.analysis_running  # Disable during analysis
         )
         
         # Boxplot settings
@@ -512,9 +518,10 @@ def main():
             y_max = st.number_input(
                 "Y-axis maximum:",
                 min_value=0.1,
-                value=100.0,
+                value=25.0,  # Changed default to match your image
                 step=0.1,
-                help="Maximum value for boxplot y-axis"
+                help="Maximum value for boxplot y-axis",
+                disabled=st.session_state.analysis_running
             )
             
             extend_bp = st.number_input(
@@ -523,7 +530,8 @@ def main():
                 max_value=5000,
                 value=500,
                 step=50,
-                help="How many base pairs around peak center to analyze"
+                help="How many base pairs around peak center to analyze",
+                disabled=st.session_state.analysis_running
             )
         
         # File upload settings
@@ -534,7 +542,8 @@ def main():
             max_value=10000,
             value=5000,
             step=100,
-            help="Randomly sample if BED file has more regions"
+            help="Randomly sample if BED file has more regions",
+            disabled=st.session_state.analysis_running
         )
     
     # Main content area
@@ -546,7 +555,8 @@ def main():
             "Choose BigWig files:",
             type=['bw', 'bigwig'],
             accept_multiple_files=True,
-            help="Upload 1-4 BigWig files. Multiple files will be compared."
+            help="Upload 1-4 BigWig files. Multiple files will be compared.",
+            disabled=st.session_state.analysis_running  # Disable during analysis
         )
         
         if bigwig_files:
@@ -559,8 +569,9 @@ def main():
             if len(bigwig_files) > 1:
                 enable_grouping = st.checkbox(
                     "🔗 Enable replicate grouping",
-                    value=True,
-                    help="Group biological replicates to average their signals"
+                    value=False,  # Start with disabled since you have individual files
+                    help="Group biological replicates to average their signals",
+                    disabled=st.session_state.analysis_running
                 )
                 
                 if enable_grouping:
@@ -577,7 +588,8 @@ def main():
             "Choose BED files:",
             type=['bed'],
             accept_multiple_files=True,
-            help="Upload BED files in the order you want them to appear in plots"
+            help="Upload BED files in the order you want them to appear in plots",
+            disabled=st.session_state.analysis_running  # Disable during analysis
         )
         
         if bed_files:
@@ -585,7 +597,14 @@ def main():
             for i, bed_file in enumerate(bed_files, 1):
                 st.write(f"{i}. {bed_file.name}")
     
-    # Analysis button
+    # Analysis button with state management
+    if st.session_state.analysis_running:
+        st.warning("⏳ Analysis in progress... Please wait.")
+        if st.button("❌ Cancel Analysis", type="secondary"):
+            st.session_state.analysis_running = False
+            st.rerun()
+        return
+    
     if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
         if not bigwig_files:
             st.error("Please upload at least one BigWig file")
@@ -602,6 +621,9 @@ def main():
         if len(bigwig_files) > 1 and replicate_groups is None:
             st.error("Please define replicate groups or disable grouping")
             return
+        
+        # Set analysis state to prevent reruns
+        st.session_state.analysis_running = True
         
         # Create temporary directory for files
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -640,35 +662,50 @@ def main():
                         group_name = f"{first_file_name}_group"
                     group_names.append(group_name)
                 
-                # Progress bar
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+                # Progress tracking with containers
+                progress_container = st.container()
+                with progress_container:
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
                 
                 # Extract signals
+                signals_data = None
                 if plot_type in ["Boxplot", "Both"]:
                     status_text.text("Extracting signals for boxplots...")
                     
                     signals_data = []
+                    total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
+                    current_task = 0
+                    
                     for group_idx, group_paths in enumerate(grouped_bigwig_paths):
                         signals_dict = {}
                         for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
-                            progress_bar.progress(((group_idx * len(bed_paths)) + i + 1) / (len(grouped_bigwig_paths) * len(bed_paths)) * 0.5)
+                            current_task += 1
+                            progress = (current_task / total_tasks) * (0.5 if plot_type == "Both" else 1.0)
+                            progress_bar.progress(progress)
+                            
                             signals = extract_signals_fast([group_paths], bed_path, extend=extend_bp, max_regions=max_regions)
                             if signals:
                                 signals_dict[bed_name] = signals
                         signals_data.append(signals_dict)
                 
+                profile_data = None
                 if plot_type in ["Line plot", "Both"]:
                     status_text.text("Extracting profiles for line plots...")
                     
                     profile_data = []
+                    total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
+                    current_task = 0
+                    
                     for group_idx, group_paths in enumerate(grouped_bigwig_paths):
                         profile_dict = {}
                         for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
+                            current_task += 1
                             if plot_type == "Both":
-                                progress_bar.progress(0.5 + ((group_idx * len(bed_paths)) + i + 1) / (len(grouped_bigwig_paths) * len(bed_paths)) * 0.5)
+                                progress = 0.5 + (current_task / total_tasks) * 0.5
                             else:
-                                progress_bar.progress(((group_idx * len(bed_paths)) + i + 1) / (len(grouped_bigwig_paths) * len(bed_paths)))
+                                progress = current_task / total_tasks
+                            progress_bar.progress(progress)
                             
                             profile = extract_signals_for_profile([group_paths], bed_path, extend=2000, max_regions=max_regions, bin_size=20)
                             if profile:
@@ -679,7 +716,7 @@ def main():
                 status_text.text("Creating plots...")
                 
                 # Create plots
-                if plot_type in ["Boxplot", "Both"]:
+                if plot_type in ["Boxplot", "Both"] and signals_data:
                     st.header("📊 Boxplot Results")
                     try:
                         if len(group_names) == 1:
@@ -710,7 +747,7 @@ def main():
                         st.error(f"Error creating boxplot: {e}")
                         st.exception(e)
                 
-                if plot_type in ["Line plot", "Both"]:
+                if plot_type in ["Line plot", "Both"] and profile_data:
                     st.header("📈 Line Plot Results")
                     try:
                         fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
@@ -742,6 +779,9 @@ def main():
             except Exception as e:
                 st.error(f"An error occurred during analysis: {e}")
                 st.exception(e)
+            finally:
+                # Reset analysis state
+                st.session_state.analysis_running = False
 
 if __name__ == "__main__":
     main()
