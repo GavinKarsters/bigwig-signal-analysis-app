@@ -191,14 +191,14 @@ def extract_signals_for_profile(bigwig_files, bed_file, extend=2000, max_regions
         'n_regions': valid_regions
     }
 
-def create_single_boxplot(signals_dict, bigwig_names, y_axis_max):
+def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_max):
     """Create boxplot for single or multiple bigwig signals across groups"""
     
     plot_data = []
     
     # Handle single vs multiple bigwigs
     if len(bigwig_names) == 1:
-        # Single bigwig
+        # Single bigwig - use ordered bed names
         for group_name, signals in signals_dict.items():
             for signal in signals:
                 plot_data.append({
@@ -207,7 +207,7 @@ def create_single_boxplot(signals_dict, bigwig_names, y_axis_max):
                 })
         
         df = pd.DataFrame(plot_data)
-        available_groups = list(signals_dict.keys())
+        available_groups = bed_names_ordered  # Use ordered names
         
         fig, ax = plt.subplots(figsize=(max(8, len(available_groups) * 1.2), 6))
         
@@ -232,7 +232,7 @@ def create_single_boxplot(signals_dict, bigwig_names, y_axis_max):
                     })
         
         df = pd.DataFrame(plot_data)
-        available_groups = list(signals_dict[0].keys())
+        available_groups = bed_names_ordered  # Use ordered names
         
         fig, ax = plt.subplots(figsize=(max(12, len(available_groups) * 1.5), 6))
         
@@ -254,25 +254,27 @@ def create_single_boxplot(signals_dict, bigwig_names, y_axis_max):
     plt.tight_layout()
     return fig
 
-def create_subplot_line_plot(profile_dict_list, bigwig_names):
-    """Create line plot with separate subplots for each group"""
+def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered):
+    """Create line plot with separate subplots for each group - PRESERVING BED FILE ORDER"""
     
-    # Get group names from first bigwig (assuming all have same groups)
-    if len(bigwig_names) == 1:
-        valid_profiles = {k: v for k, v in profile_dict_list[0].items() if v is not None}
-    else:
-        # Get groups that exist in all bigwigs
-        all_groups = set(profile_dict_list[0].keys())
-        for profile_dict in profile_dict_list[1:]:
-            all_groups = all_groups.intersection(set(profile_dict.keys()))
-        valid_profiles = {group: profile_dict_list[0][group] for group in all_groups 
-                         if all(profile_dict_list[i][group] is not None for i in range(len(profile_dict_list)))}
+    # Use the ordered bed names instead of dictionary keys
+    valid_groups = []
+    for bed_name in bed_names_ordered:
+        # Check if this bed file has valid data in all bigwigs
+        if len(bigwig_names) == 1:
+            if bed_name in profile_dict_list[0] and profile_dict_list[0][bed_name] is not None:
+                valid_groups.append(bed_name)
+        else:
+            # For multiple bigwigs, check if all have this bed file
+            if all(bed_name in profile_dict_list[i] and profile_dict_list[i][bed_name] is not None 
+                   for i in range(len(profile_dict_list))):
+                valid_groups.append(bed_name)
     
-    if not valid_profiles:
+    if not valid_groups:
         st.error("No valid profiles to plot")
         return None
     
-    n_groups = len(valid_profiles)
+    n_groups = len(valid_groups)
     
     # Calculate subplot layout
     if n_groups <= 3:
@@ -299,8 +301,8 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names):
     # Colors for different bigwigs
     colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D'][:len(bigwig_names)]
     
-    # Plot each group in its own subplot
-    for idx, group_name in enumerate(valid_profiles.keys()):
+    # Plot each group in its own subplot - USING ORDERED GROUPS
+    for idx, group_name in enumerate(valid_groups):
         ax = axes[idx]
         
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
@@ -477,6 +479,9 @@ def main():
                     bed_paths.append(bed_path)
                     bed_names.append(Path(bed_file.name).stem)
                 
+                # Keep bed files in upload order
+                bed_names_ordered = bed_names.copy()
+                
                 # Progress bar
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -531,17 +536,14 @@ def main():
                 if plot_type in ["Boxplot", "Both"]:
                     st.header("📊 Boxplot Results")
                     try:
-                        if len(bigwig_paths) == 1:
-                            fig_box = create_single_boxplot(signals_data, bigwig_names, y_max)
-                        else:
-                            fig_box = create_single_boxplot(signals_data, bigwig_names, y_max)
+                        fig_box = create_single_boxplot(signals_data, bigwig_names, bed_names_ordered, y_max)
                         
                         st.pyplot(fig_box)
                         plt.close(fig_box)
                         
                         # Download button for boxplot
                         buf = io.BytesIO()
-                        fig_box = create_single_boxplot(signals_data, bigwig_names, y_max) if len(bigwig_paths) == 1 else create_single_boxplot(signals_data, bigwig_names, y_max)
+                        fig_box = create_single_boxplot(signals_data, bigwig_names, bed_names_ordered, y_max)
                         fig_box.savefig(buf, format='png', dpi=300, bbox_inches='tight')
                         buf.seek(0)
                         plt.close(fig_box)
@@ -559,7 +561,7 @@ def main():
                 if plot_type in ["Line plot", "Both"]:
                     st.header("📈 Line Plot Results")
                     try:
-                        fig_line = create_subplot_line_plot(profile_data, bigwig_names)
+                        fig_line = create_subplot_line_plot(profile_data, bigwig_names, bed_names_ordered)
                         
                         if fig_line:
                             st.pyplot(fig_line)
@@ -567,7 +569,7 @@ def main():
                             
                             # Download button for line plot
                             buf = io.BytesIO()
-                            fig_line = create_subplot_line_plot(profile_data, bigwig_names)
+                            fig_line = create_subplot_line_plot(profile_data, bigwig_names, bed_names_ordered)
                             fig_line.savefig(buf, format='png', dpi=300, bbox_inches='tight')
                             buf.seek(0)
                             plt.close(fig_line)
