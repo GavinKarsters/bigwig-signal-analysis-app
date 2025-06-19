@@ -26,11 +26,96 @@ def save_uploaded_file(uploaded_file, temp_dir):
         f.write(uploaded_file.getbuffer())
     return file_path
 
-def extract_signals_fast(bigwig_files, bed_file, extend=500, max_regions=5000):
-    """Extract signals for boxplots - peak center only"""
+def setup_replicate_groups(bigwig_files):
+    """Setup UI for defining replicate groups"""
+    st.subheader("🔗 Replicate Grouping")
+    st.info("Group biological replicates together. Files in the same group will be averaged during signal extraction.")
     
-    if isinstance(bigwig_files, str):
-        bigwig_files = [bigwig_files]
+    if len(bigwig_files) <= 1:
+        return [[0]] if bigwig_files else []
+    
+    # Initialize session state for groups
+    if 'replicate_groups' not in st.session_state:
+        st.session_state.replicate_groups = [[i] for i in range(len(bigwig_files))]
+    
+    # Display current files
+    st.write("**Uploaded BigWig Files:**")
+    for i, bw_file in enumerate(bigwig_files):
+        st.write(f"{i+1}. {bw_file.name}")
+    
+    # Quick grouping options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📎 Group consecutive pairs (1+2, 3+4, etc.)"):
+            groups = []
+            for i in range(0, len(bigwig_files), 2):
+                if i + 1 < len(bigwig_files):
+                    groups.append([i, i + 1])
+                else:
+                    groups.append([i])
+            st.session_state.replicate_groups = groups
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Reset to individual files"):
+            st.session_state.replicate_groups = [[i] for i in range(len(bigwig_files))]
+            st.rerun()
+    
+    # Manual group assignment
+    num_groups = st.number_input("Number of groups:", min_value=1, max_value=len(bigwig_files), 
+                                value=len(st.session_state.replicate_groups))
+    
+    new_groups = []
+    for group_idx in range(num_groups):
+        st.write(f"**Group {group_idx + 1}:**")
+        
+        # Get current group or initialize empty
+        current_group = st.session_state.replicate_groups[group_idx] if group_idx < len(st.session_state.replicate_groups) else []
+        
+        # Multi-select for files in this group
+        selected_files = st.multiselect(
+            f"Select files for Group {group_idx + 1}:",
+            options=list(range(len(bigwig_files))),
+            default=current_group,
+            format_func=lambda x: f"{x+1}. {bigwig_files[x].name}",
+            key=f"group_{group_idx}"
+        )
+        
+        if selected_files:
+            new_groups.append(selected_files)
+            file_names = [bigwig_files[i].name for i in selected_files]
+            if len(selected_files) > 1:
+                st.success(f"✅ Will average: {', '.join(file_names)}")
+            else:
+                st.info(f"ℹ️ Single file: {file_names[0]}")
+    
+    # Validate groups
+    all_assigned = set()
+    for group in new_groups:
+        all_assigned.update(group)
+    
+    unassigned = set(range(len(bigwig_files))) - all_assigned
+    if unassigned:
+        st.warning(f"⚠️ Unassigned files: {[bigwig_files[i].name for i in unassigned]}")
+    
+    # Check for duplicates
+    duplicates = []
+    for i, group in enumerate(new_groups):
+        if len(set(group)) != len(group):
+            duplicates.append(i + 1)
+    
+    if duplicates:
+        st.error(f"❌ Groups {duplicates} contain duplicate files!")
+        return None
+    
+    # Update session state
+    st.session_state.replicate_groups = new_groups
+    
+    return new_groups
+
+def extract_signals_fast(bigwig_file_groups, bed_file, extend=500, max_regions=5000):
+    """Extract signals for boxplots - peak center only, with replicate averaging"""
     
     # Read BED file
     try:
@@ -48,9 +133,12 @@ def extract_signals_fast(bigwig_files, bed_file, extend=500, max_regions=5000):
         st.error(f"ERROR reading BED file {bed_file}: {e}")
         return []
     
-    # Open bigwig files
+    # Open all bigwig files
     try:
-        bw_handles = [pyBigWig.open(bw_file) for bw_file in bigwig_files]
+        all_bw_handles = []
+        for group in bigwig_file_groups:
+            group_handles = [pyBigWig.open(group[i]) for i in range(len(group))]
+            all_bw_handles.append(group_handles)
     except Exception as e:
         st.error(f"ERROR opening BigWig files: {e}")
         return []
@@ -64,22 +152,34 @@ def extract_signals_fast(bigwig_files, bed_file, extend=500, max_regions=5000):
             region_start = max(0, center - extend)
             region_end = center + extend
             
-            replicate_signals = []
-            for bw in bw_handles:
-                values = bw.values(row['chr'], region_start, region_end)
-                if values is not None:
-                    clean_values = [v for v in values if v is not None and not np.isnan(v)]
-                    if clean_values:
-                        mean_signal = np.mean(clean_values)
-                        replicate_signals.append(mean_signal)
+            # Extract signals from each replicate group
+            group_signals = []
+            for group_handles in all_bw_handles:
+                # Average within each replicate group
+                replicate_signals = []
+                for bw in group_handles:
+                    values = bw.values(row['chr'], region_start, region_end)
+                    if values is not None:
+                        clean_values = [v for v in values if v is not None and not np.isnan(v)]
+                        if clean_values:
+                            mean_signal = np.mean(clean_values)
+                            replicate_signals.append(mean_signal)
+                        else:
+                            replicate_signals.append(0)
                     else:
                         replicate_signals.append(0)
+                
+                # Average across replicates in this group
+                if replicate_signals:
+                    group_consensus = np.mean(replicate_signals)
+                    group_signals.append(group_consensus)
                 else:
-                    replicate_signals.append(0)
+                    group_signals.append(0)
             
-            if replicate_signals:
-                consensus_signal = np.mean(replicate_signals)
-                signals.append(consensus_signal)
+            # Average across all groups (if multiple conditions)
+            if group_signals:
+                final_signal = np.mean(group_signals)
+                signals.append(final_signal)
                 valid_regions += 1
             else:
                 signals.append(0)
@@ -87,17 +187,15 @@ def extract_signals_fast(bigwig_files, bed_file, extend=500, max_regions=5000):
         except Exception as e:
             signals.append(0)
     
-    # Close bigwig files
-    for bw in bw_handles:
-        bw.close()
+    # Close all bigwig files
+    for group_handles in all_bw_handles:
+        for bw in group_handles:
+            bw.close()
         
     return signals
 
-def extract_signals_for_profile(bigwig_files, bed_file, extend=2000, max_regions=5000, bin_size=20):
-    """Extract signals for line plots - returns position-wise signals"""
-    
-    if isinstance(bigwig_files, str):
-        bigwig_files = [bigwig_files]
+def extract_signals_for_profile(bigwig_file_groups, bed_file, extend=2000, max_regions=5000, bin_size=20):
+    """Extract signals for line plots - returns position-wise signals with replicate averaging"""
     
     # Read BED file
     try:
@@ -115,9 +213,12 @@ def extract_signals_for_profile(bigwig_files, bed_file, extend=2000, max_regions
         st.error(f"ERROR reading BED file {bed_file}: {e}")
         return None
     
-    # Open bigwig files
+    # Open all bigwig files
     try:
-        bw_handles = [pyBigWig.open(bw_file) for bw_file in bigwig_files]
+        all_bw_handles = []
+        for group in bigwig_file_groups:
+            group_handles = [pyBigWig.open(group[i]) for i in range(len(group))]
+            all_bw_handles.append(group_handles)
     except Exception as e:
         st.error(f"ERROR opening BigWig files: {e}")
         return None
@@ -136,41 +237,52 @@ def extract_signals_for_profile(bigwig_files, bed_file, extend=2000, max_regions
             region_start = max(0, center - extend)
             region_end = center + extend
             
-            # Extract signals from all replicates
-            replicate_profiles = []
-            for bw in bw_handles:
-                values = bw.values(row['chr'], region_start, region_end)
-                if values is not None and len(values) > 0:
-                    clean_values = np.array([v if v is not None and not np.isnan(v) else 0 for v in values])
-                    
-                    if len(clean_values) >= n_bins:
-                        # Bin by averaging
-                        binned_values = []
-                        values_per_bin = len(clean_values) // n_bins
-                        for i in range(n_bins):
-                            start_idx = i * values_per_bin
-                            end_idx = (i + 1) * values_per_bin if i < n_bins - 1 else len(clean_values)
-                            bin_mean = np.mean(clean_values[start_idx:end_idx])
-                            binned_values.append(bin_mean)
-                        replicate_profiles.append(binned_values)
+            # Extract signals from each replicate group
+            group_profiles = []
+            for group_handles in all_bw_handles:
+                # Average within each replicate group
+                replicate_profiles = []
+                for bw in group_handles:
+                    values = bw.values(row['chr'], region_start, region_end)
+                    if values is not None and len(values) > 0:
+                        clean_values = np.array([v if v is not None and not np.isnan(v) else 0 for v in values])
+                        
+                        if len(clean_values) >= n_bins:
+                            # Bin by averaging
+                            binned_values = []
+                            values_per_bin = len(clean_values) // n_bins
+                            for i in range(n_bins):
+                                start_idx = i * values_per_bin
+                                end_idx = (i + 1) * values_per_bin if i < n_bins - 1 else len(clean_values)
+                                bin_mean = np.mean(clean_values[start_idx:end_idx])
+                                binned_values.append(bin_mean)
+                            replicate_profiles.append(binned_values)
+                        else:
+                            padded_values = np.pad(clean_values, (0, n_bins - len(clean_values)), 'constant')
+                            replicate_profiles.append(padded_values[:n_bins])
                     else:
-                        padded_values = np.pad(clean_values, (0, n_bins - len(clean_values)), 'constant')
-                        replicate_profiles.append(padded_values[:n_bins])
+                        replicate_profiles.append([0] * n_bins)
+                
+                # Average across replicates in this group
+                if replicate_profiles:
+                    group_consensus = np.mean(replicate_profiles, axis=0)
+                    group_profiles.append(group_consensus)
                 else:
-                    replicate_profiles.append([0] * n_bins)
+                    group_profiles.append([0] * n_bins)
             
-            # Average across replicates
-            if replicate_profiles:
-                consensus_profile = np.mean(replicate_profiles, axis=0)
-                all_profiles.append(consensus_profile)
+            # Average across all groups (if multiple conditions)
+            if group_profiles:
+                final_profile = np.mean(group_profiles, axis=0)
+                all_profiles.append(final_profile)
                 valid_regions += 1
                 
         except Exception as e:
             continue
     
-    # Close bigwig files
-    for bw in bw_handles:
-        bw.close()
+    # Close all bigwig files
+    for group_handles in all_bw_handles:
+        for bw in group_handles:
+            bw.close()
     
     if not all_profiles:
         return None
@@ -244,7 +356,7 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
         
         ax.set_title(f'Signal Distribution Comparison at Peak Centers\nAcross Uploaded BED Files', 
                     fontsize=14, fontweight='bold', pad=20)
-        ax.legend(title='BigWig Files', loc='upper right')
+        ax.legend(title='BigWig Groups', loc='upper right')
     
     ax.set_xlabel('BED File Groups', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Signal', fontsize=12, fontweight='bold')
@@ -253,7 +365,6 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
     
     plt.tight_layout()
     return fig
-
 
 def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered):
     """Create line plot with separate subplots for each group - PRESERVING BED FILE ORDER"""
@@ -356,7 +467,7 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
     if len(bigwig_names) == 1:
         title = f'{bigwig_names[0]} Signal Profiles Across Uploaded BED Files'
     else:
-        title = f'Signal Profile Comparison Across Uploaded BED Files\n(Solid=1st BigWig, Dashed=2nd BigWig, etc.)'
+        title = f'Signal Profile Comparison Across Uploaded BED Files\n(Solid=1st BigWig Group, Dashed=2nd BigWig Group, etc.)'
     
     # IMPROVED TITLE POSITIONING
     fig.suptitle(title, fontsize=14, fontweight='bold', y=0.98)
@@ -367,16 +478,13 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
     
     return fig
 
-    
-    
-    
-
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
     st.markdown("""
     Upload BigWig and BED files to analyze signal distributions.
     - **Boxplots**: Show signal distribution at peak centers (±500bp, customizable)
     - **Line plots**: Show signal profiles across regions (±2000bp, auto-scaled)
+    - **Replicate Averaging**: Automatically average biological replicates during signal extraction
     """)
     
     # Sidebar for file uploads and settings
@@ -437,6 +545,23 @@ def main():
             st.success(f"Uploaded {len(bigwig_files)} BigWig file(s)")
             for i, bw_file in enumerate(bigwig_files, 1):
                 st.write(f"{i}. {bw_file.name}")
+            
+            # Replicate grouping interface
+            replicate_groups = None
+            if len(bigwig_files) > 1:
+                enable_grouping = st.checkbox(
+                    "🔗 Enable replicate grouping",
+                    value=True,
+                    help="Group biological replicates to average their signals"
+                )
+                
+                if enable_grouping:
+                    replicate_groups = setup_replicate_groups(bigwig_files)
+                else:
+                    # Each file is its own group
+                    replicate_groups = [[i] for i in range(len(bigwig_files))]
+            else:
+                replicate_groups = [[0]]  # Single file
     
     with col2:
         st.header("📄 Upload BED Files")
@@ -466,17 +591,18 @@ def main():
             st.error("Please upload no more than 4 BigWig files")
             return
         
+        if len(bigwig_files) > 1 and replicate_groups is None:
+            st.error("Please define replicate groups or disable grouping")
+            return
+        
         # Create temporary directory for files
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 # Save uploaded files
                 bigwig_paths = []
-                bigwig_names = []
-                
                 for bw_file in bigwig_files:
                     bw_path = save_uploaded_file(bw_file, temp_dir)
                     bigwig_paths.append(bw_path)
-                    bigwig_names.append(Path(bw_file.name).stem)
                 
                 bed_paths = []
                 bed_names = []
@@ -489,6 +615,21 @@ def main():
                 # Keep bed files in upload order
                 bed_names_ordered = bed_names.copy()
                 
+                # Create grouped file paths for extraction
+                grouped_bigwig_paths = []
+                group_names = []
+                
+                for group in replicate_groups:
+                    group_paths = [bigwig_paths[i] for i in group]
+                    grouped_bigwig_paths.append(group_paths)
+                    
+                    # Create group name
+                    if len(group) == 1:
+                        group_name = Path(bigwig_files[group[0]].name).stem
+                    else:
+                        group_name = f"Group{len(group_names)+1}"  # Simple naming
+                    group_names.append(group_name)
+                
                 # Progress bar
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -497,41 +638,29 @@ def main():
                 if plot_type in ["Boxplot", "Both"]:
                     status_text.text("Extracting signals for boxplots...")
                     
-                    if len(bigwig_paths) == 1:
-                        # Single bigwig analysis
+                    signals_data = []
+                    for group_idx, group_paths in enumerate(grouped_bigwig_paths):
                         signals_dict = {}
                         for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
-                            progress_bar.progress((i + 1) / len(bed_paths) * 0.5)
-                            signals = extract_signals_fast(bigwig_paths, bed_path, extend=extend_bp, max_regions=max_regions)
+                            progress_bar.progress(((group_idx * len(bed_paths)) + i + 1) / (len(grouped_bigwig_paths) * len(bed_paths)) * 0.5)
+                            signals = extract_signals_fast([group_paths], bed_path, extend=extend_bp, max_regions=max_regions)
                             if signals:
                                 signals_dict[bed_name] = signals
-                        
-                        signals_data = signals_dict
-                    else:
-                        # Multiple bigwig analysis
-                        signals_data = []
-                        for bw_idx, bw_path in enumerate(bigwig_paths):
-                            signals_dict = {}
-                            for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
-                                progress_bar.progress(((bw_idx * len(bed_paths)) + i + 1) / (len(bigwig_paths) * len(bed_paths)) * 0.5)
-                                signals = extract_signals_fast([bw_path], bed_path, extend=extend_bp, max_regions=max_regions)
-                                if signals:
-                                    signals_dict[bed_name] = signals
-                            signals_data.append(signals_dict)
+                        signals_data.append(signals_dict)
                 
                 if plot_type in ["Line plot", "Both"]:
                     status_text.text("Extracting profiles for line plots...")
                     
                     profile_data = []
-                    for bw_idx, bw_path in enumerate(bigwig_paths):
+                    for group_idx, group_paths in enumerate(grouped_bigwig_paths):
                         profile_dict = {}
                         for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
                             if plot_type == "Both":
-                                progress_bar.progress(0.5 + ((bw_idx * len(bed_paths)) + i + 1) / (len(bigwig_paths) * len(bed_paths)) * 0.5)
+                                progress_bar.progress(0.5 + ((group_idx * len(bed_paths)) + i + 1) / (len(grouped_bigwig_paths) * len(bed_paths)) * 0.5)
                             else:
-                                progress_bar.progress(((bw_idx * len(bed_paths)) + i + 1) / (len(bigwig_paths) * len(bed_paths)))
+                                progress_bar.progress(((group_idx * len(bed_paths)) + i + 1) / (len(grouped_bigwig_paths) * len(bed_paths)))
                             
-                            profile = extract_signals_for_profile([bw_path], bed_path, extend=2000, max_regions=max_regions, bin_size=20)
+                            profile = extract_signals_for_profile([group_paths], bed_path, extend=2000, max_regions=max_regions, bin_size=20)
                             if profile:
                                 profile_dict[bed_name] = profile
                         profile_data.append(profile_dict)
@@ -543,14 +672,19 @@ def main():
                 if plot_type in ["Boxplot", "Both"]:
                     st.header("📊 Boxplot Results")
                     try:
-                        fig_box = create_single_boxplot(signals_data, bigwig_names, bed_names_ordered, y_max)
+                        if len(group_names) == 1:
+                            signals_dict = signals_data[0]
+                        else:
+                            signals_dict = signals_data
+                            
+                        fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
                         
                         st.pyplot(fig_box)
                         plt.close(fig_box)
                         
                         # Download button for boxplot
                         buf = io.BytesIO()
-                        fig_box = create_single_boxplot(signals_data, bigwig_names, bed_names_ordered, y_max)
+                        fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
                         fig_box.savefig(buf, format='png', dpi=300, bbox_inches='tight')
                         buf.seek(0)
                         plt.close(fig_box)
@@ -568,7 +702,7 @@ def main():
                 if plot_type in ["Line plot", "Both"]:
                     st.header("📈 Line Plot Results")
                     try:
-                        fig_line = create_subplot_line_plot(profile_data, bigwig_names, bed_names_ordered)
+                        fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
                         
                         if fig_line:
                             st.pyplot(fig_line)
@@ -576,7 +710,7 @@ def main():
                             
                             # Download button for line plot
                             buf = io.BytesIO()
-                            fig_line = create_subplot_line_plot(profile_data, bigwig_names, bed_names_ordered)
+                            fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
                             fig_line.savefig(buf, format='png', dpi=300, bbox_inches='tight')
                             buf.seek(0)
                             plt.close(fig_line)
