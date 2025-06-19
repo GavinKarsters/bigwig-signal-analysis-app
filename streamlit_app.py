@@ -34,31 +34,9 @@ def setup_replicate_groups(bigwig_files):
     if len(bigwig_files) <= 1:
         return [[0]] if bigwig_files else []
     
-    # Check if number of files changed and reset groups if needed
-    current_file_count = len(bigwig_files)
-    stored_file_count = st.session_state.get('last_file_count', 0)
-    
-    if current_file_count != stored_file_count:
-        # Reset groups when file count changes
-        st.session_state.replicate_groups = [[i] for i in range(current_file_count)]
-        st.session_state.last_file_count = current_file_count
-    
-    # Initialize session state for groups if not exists
+    # Initialize session state for groups
     if 'replicate_groups' not in st.session_state:
-        st.session_state.replicate_groups = [[i] for i in range(current_file_count)]
-    
-    # Validate existing groups - remove invalid indices
-    valid_groups = []
-    for group in st.session_state.replicate_groups:
-        valid_group = [i for i in group if 0 <= i < current_file_count]
-        if valid_group:  # Only add non-empty groups
-            valid_groups.append(valid_group)
-    
-    # If no valid groups, reset to individual files
-    if not valid_groups:
-        valid_groups = [[i] for i in range(current_file_count)]
-    
-    st.session_state.replicate_groups = valid_groups
+        st.session_state.replicate_groups = [[i] for i in range(len(bigwig_files))]
     
     # Display current files
     st.write("**Uploaded BigWig Files:**")
@@ -85,25 +63,15 @@ def setup_replicate_groups(bigwig_files):
             st.rerun()
     
     # Manual group assignment
-    max_groups = len(st.session_state.replicate_groups)
-    num_groups = st.number_input(
-        "Number of groups:", 
-        min_value=1, 
-        max_value=len(bigwig_files), 
-        value=max_groups,
-        key="num_groups_input"
-    )
+    num_groups = st.number_input("Number of groups:", min_value=1, max_value=len(bigwig_files), 
+                                value=len(st.session_state.replicate_groups))
     
     new_groups = []
     for group_idx in range(num_groups):
         st.write(f"**Group {group_idx + 1}:**")
         
-        # Get current group or initialize empty, ensuring valid indices
-        if group_idx < len(st.session_state.replicate_groups):
-            current_group = [i for i in st.session_state.replicate_groups[group_idx] 
-                           if 0 <= i < len(bigwig_files)]
-        else:
-            current_group = []
+        # Get current group or initialize empty
+        current_group = st.session_state.replicate_groups[group_idx] if group_idx < len(st.session_state.replicate_groups) else []
         
         # Multi-select for files in this group
         selected_files = st.multiselect(
@@ -111,7 +79,7 @@ def setup_replicate_groups(bigwig_files):
             options=list(range(len(bigwig_files))),
             default=current_group,
             format_func=lambda x: f"{x+1}. {bigwig_files[x].name}",
-            key=f"group_{group_idx}_files"
+            key=f"group_{group_idx}"
         )
         
         if selected_files:
@@ -145,17 +113,6 @@ def setup_replicate_groups(bigwig_files):
     st.session_state.replicate_groups = new_groups
     
     return new_groups
-
-def clear_analysis_cache():
-    """Clear cached analysis data"""
-    keys_to_clear = [
-        'analysis_complete', 'signals_data', 'profile_data', 
-        'group_names', 'bed_names_ordered', 'analysis_params',
-        'replicate_groups', 'last_file_count'
-    ]
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
 
 def extract_signals_fast(bigwig_file_groups, bed_file, extend=500, max_regions=5000):
     """Extract signals for boxplots - peak center only, with replicate averaging"""
@@ -377,12 +334,15 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
         
     else:
         # Multiple bigwigs - create paired comparison
+        # IMPORTANT: Iterate through bigwig_names in order to preserve upload order
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
-            for group_name, signals in signals_dict[bigwig_idx].items():
+            # Make sure we use the signals_dict in the same order as bigwig_names
+            signals_dict_for_bigwig = signals_dict[bigwig_idx]
+            for group_name, signals in signals_dict_for_bigwig.items():
                 for signal in signals:
                     plot_data.append({
                         'Group': group_name,
-                        'BigWig': bigwig_name,
+                        'BigWig': bigwig_name,  # This preserves the upload order
                         'Signal': signal
                     })
         
@@ -391,8 +351,10 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
         
         fig, ax = plt.subplots(figsize=(max(12, len(available_groups) * 1.5), 6))
         
+        # IMPORTANT: Use hue_order parameter to preserve BigWig upload order
         box_plot = sns.boxplot(data=df, x='Group', y='Signal', hue='BigWig',
-                              order=available_groups, 
+                              order=available_groups,
+                              hue_order=bigwig_names,  # This ensures upload order is preserved!
                               palette=['lightblue', 'lightcoral', 'lightgreen', 'lightyellow'][:len(bigwig_names)],
                               showfliers=False,
                               ax=ax)
@@ -403,7 +365,9 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
     
     ax.set_xlabel('BED File Groups', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Signal', fontsize=12, fontweight='bold')
-    ax.set_xticklabels(available_groups, rotation=45, ha='right')
+    
+    # FIX: Use plt.setp instead of ax.set_xticklabels to avoid the warning
+    plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
     ax.set_ylim(0, y_axis_max)
     
     plt.tight_layout()
@@ -453,13 +417,14 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
     else:
         axes = axes.flatten()
     
-    # Colors for different bigwigs
+    # Colors for different bigwigs - MAINTAIN UPLOAD ORDER
     colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D'][:len(bigwig_names)]
     
     # Plot each group in its own subplot - USING ORDERED GROUPS
     for idx, group_name in enumerate(valid_groups):
         ax = axes[idx]
         
+        # IMPORTANT: Iterate through bigwig_names in order to preserve upload order
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
             profile_data = profile_dict_list[bigwig_idx][group_name]
             
@@ -469,7 +434,7 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
                 std_signal = profile_data['std_signal']
                 n_regions = profile_data['n_regions']
                 
-                # Plot mean line
+                # Plot mean line - use upload order for line styles
                 line_style = '-' if bigwig_idx == 0 else '--'
                 ax.plot(positions, mean_signal, 
                         color=colors[bigwig_idx], 
@@ -510,7 +475,7 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
     if len(bigwig_names) == 1:
         title = f'{bigwig_names[0]} Signal Profiles Across Uploaded BED Files'
     else:
-        title = f'Signal Profile Comparison Across Uploaded BED Files\n(Solid=1st BigWig Group, Dashed=2nd BigWig Group, etc.)'
+        title = f'Signal Profile Comparison Across Uploaded BED Files\n(Solid=1st Upload, Dashed=2nd Upload, etc.)'
     
     # IMPROVED TITLE POSITIONING
     fig.suptitle(title, fontsize=14, fontweight='bold', y=0.98)
@@ -571,12 +536,6 @@ def main():
             step=100,
             help="Randomly sample if BED file has more regions"
         )
-        
-        # Clear cache button
-        if st.button("🗑️ Clear Analysis Cache", help="Clear cached analysis data to start fresh"):
-            clear_analysis_cache()
-            st.success("Cache cleared!")
-            st.rerun()
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -587,8 +546,7 @@ def main():
             "Choose BigWig files:",
             type=['bw', 'bigwig'],
             accept_multiple_files=True,
-            help="Upload 1-4 BigWig files. Multiple files will be compared.",
-            on_change=clear_analysis_cache  # Clear cache when files change
+            help="Upload 1-4 BigWig files. Multiple files will be compared."
         )
         
         if bigwig_files:
@@ -619,8 +577,7 @@ def main():
             "Choose BED files:",
             type=['bed'],
             accept_multiple_files=True,
-            help="Upload BED files in the order you want them to appear in plots",
-            on_change=clear_analysis_cache  # Clear cache when files change
+            help="Upload BED files in the order you want them to appear in plots"
         )
         
         if bed_files:
@@ -674,11 +631,13 @@ def main():
                     group_paths = [bigwig_paths[i] for i in group]
                     grouped_bigwig_paths.append(group_paths)
                     
-                    # Create group name
+                    # Create group name - PRESERVE UPLOAD ORDER
                     if len(group) == 1:
                         group_name = Path(bigwig_files[group[0]].name).stem
                     else:
-                        group_name = f"Group{len(group_names)+1}"  # Simple naming
+                        # Use name of first file in group to preserve order
+                        first_file_name = Path(bigwig_files[group[0]].name).stem
+                        group_name = f"{first_file_name}_group"
                     group_names.append(group_name)
                 
                 # Progress bar
