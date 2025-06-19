@@ -34,9 +34,31 @@ def setup_replicate_groups(bigwig_files):
     if len(bigwig_files) <= 1:
         return [[0]] if bigwig_files else []
     
-    # Initialize session state for groups
+    # Check if number of files changed and reset groups if needed
+    current_file_count = len(bigwig_files)
+    stored_file_count = st.session_state.get('last_file_count', 0)
+    
+    if current_file_count != stored_file_count:
+        # Reset groups when file count changes
+        st.session_state.replicate_groups = [[i] for i in range(current_file_count)]
+        st.session_state.last_file_count = current_file_count
+    
+    # Initialize session state for groups if not exists
     if 'replicate_groups' not in st.session_state:
-        st.session_state.replicate_groups = [[i] for i in range(len(bigwig_files))]
+        st.session_state.replicate_groups = [[i] for i in range(current_file_count)]
+    
+    # Validate existing groups - remove invalid indices
+    valid_groups = []
+    for group in st.session_state.replicate_groups:
+        valid_group = [i for i in group if 0 <= i < current_file_count]
+        if valid_group:  # Only add non-empty groups
+            valid_groups.append(valid_group)
+    
+    # If no valid groups, reset to individual files
+    if not valid_groups:
+        valid_groups = [[i] for i in range(current_file_count)]
+    
+    st.session_state.replicate_groups = valid_groups
     
     # Display current files
     st.write("**Uploaded BigWig Files:**")
@@ -63,15 +85,25 @@ def setup_replicate_groups(bigwig_files):
             st.rerun()
     
     # Manual group assignment
-    num_groups = st.number_input("Number of groups:", min_value=1, max_value=len(bigwig_files), 
-                                value=len(st.session_state.replicate_groups))
+    max_groups = len(st.session_state.replicate_groups)
+    num_groups = st.number_input(
+        "Number of groups:", 
+        min_value=1, 
+        max_value=len(bigwig_files), 
+        value=max_groups,
+        key="num_groups_input"
+    )
     
     new_groups = []
     for group_idx in range(num_groups):
         st.write(f"**Group {group_idx + 1}:**")
         
-        # Get current group or initialize empty
-        current_group = st.session_state.replicate_groups[group_idx] if group_idx < len(st.session_state.replicate_groups) else []
+        # Get current group or initialize empty, ensuring valid indices
+        if group_idx < len(st.session_state.replicate_groups):
+            current_group = [i for i in st.session_state.replicate_groups[group_idx] 
+                           if 0 <= i < len(bigwig_files)]
+        else:
+            current_group = []
         
         # Multi-select for files in this group
         selected_files = st.multiselect(
@@ -79,7 +111,7 @@ def setup_replicate_groups(bigwig_files):
             options=list(range(len(bigwig_files))),
             default=current_group,
             format_func=lambda x: f"{x+1}. {bigwig_files[x].name}",
-            key=f"group_{group_idx}"
+            key=f"group_{group_idx}_files"
         )
         
         if selected_files:
@@ -113,6 +145,17 @@ def setup_replicate_groups(bigwig_files):
     st.session_state.replicate_groups = new_groups
     
     return new_groups
+
+def clear_analysis_cache():
+    """Clear cached analysis data"""
+    keys_to_clear = [
+        'analysis_complete', 'signals_data', 'profile_data', 
+        'group_names', 'bed_names_ordered', 'analysis_params',
+        'replicate_groups', 'last_file_count'
+    ]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 def extract_signals_fast(bigwig_file_groups, bed_file, extend=500, max_regions=5000):
     """Extract signals for boxplots - peak center only, with replicate averaging"""
@@ -528,6 +571,12 @@ def main():
             step=100,
             help="Randomly sample if BED file has more regions"
         )
+        
+        # Clear cache button
+        if st.button("🗑️ Clear Analysis Cache", help="Clear cached analysis data to start fresh"):
+            clear_analysis_cache()
+            st.success("Cache cleared!")
+            st.rerun()
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -538,7 +587,8 @@ def main():
             "Choose BigWig files:",
             type=['bw', 'bigwig'],
             accept_multiple_files=True,
-            help="Upload 1-4 BigWig files. Multiple files will be compared."
+            help="Upload 1-4 BigWig files. Multiple files will be compared.",
+            on_change=clear_analysis_cache  # Clear cache when files change
         )
         
         if bigwig_files:
@@ -569,7 +619,8 @@ def main():
             "Choose BED files:",
             type=['bed'],
             accept_multiple_files=True,
-            help="Upload BED files in the order you want them to appear in plots"
+            help="Upload BED files in the order you want them to appear in plots",
+            on_change=clear_analysis_cache  # Clear cache when files change
         )
         
         if bed_files:
@@ -698,6 +749,7 @@ def main():
                         
                     except Exception as e:
                         st.error(f"Error creating boxplot: {e}")
+                        st.exception(e)
                 
                 if plot_type in ["Line plot", "Both"]:
                     st.header("📈 Line Plot Results")
@@ -724,6 +776,7 @@ def main():
                         
                     except Exception as e:
                         st.error(f"Error creating line plot: {e}")
+                        st.exception(e)
                 
                 status_text.text("✅ Analysis complete!")
                 
