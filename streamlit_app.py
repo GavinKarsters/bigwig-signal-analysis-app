@@ -28,6 +28,56 @@ def save_uploaded_file(uploaded_file, temp_dir):
         f.write(uploaded_file.getbuffer())
     return file_path
 
+def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
+    """Setup UI for customizing BigWig and BED file names"""
+    
+    with st.expander("🏷️ Customize Names (Optional)", expanded=False):
+        st.info("Customize display names for your files. These names will appear in plots and legends.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("BigWig Group Names")
+            custom_bigwig_names = []
+            for i, name in enumerate(group_names):
+                custom_name = st.text_input(
+                    f"Group {i+1}:",
+                    value=name,
+                    key=f"{mode}_bigwig_name_{i}",
+                    help=f"Original: {name}"
+                )
+                custom_bigwig_names.append(custom_name if custom_name.strip() else name)
+        
+        with col2:
+            st.subheader("BED File Names")
+            custom_bed_names = []
+            for i, name in enumerate(bed_names_ordered):
+                custom_name = st.text_input(
+                    f"BED {i+1}:",
+                    value=name,
+                    key=f"{mode}_bed_name_{i}",
+                    help=f"Original: {name}"
+                )
+                custom_bed_names.append(custom_name if custom_name.strip() else name)
+        
+        return custom_bigwig_names, custom_bed_names
+
+def export_plot_with_format(fig, base_filename, format_type):
+    """Export plot in specified format without losing the figure"""
+    buf = io.BytesIO()
+    
+    if format_type.lower() == 'pdf':
+        fig.savefig(buf, format='pdf', dpi=300, bbox_inches='tight')
+        mime_type = "application/pdf"
+        filename = f"{base_filename}.pdf"
+    else:  # PNG
+        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        mime_type = "image/png"
+        filename = f"{base_filename}.png"
+    
+    buf.seek(0)
+    return buf.getvalue(), filename, mime_type
+
 def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_names_ordered, 
                                 bigwig_file_names, analysis_params):
     """Export all extracted signal data to Excel file with metadata"""
@@ -371,7 +421,7 @@ def setup_replicate_groups(bigwig_files):
     
     return new_groups
 
-# [Keep all the extraction and plotting functions exactly the same as before]
+# [Keep all the extraction functions exactly the same as before]
 def extract_signals_fast(bigwig_file_groups, bed_file, extend=500, max_regions=5000):
     """Extract signals for boxplots - peak center only, with replicate averaging"""
     
@@ -800,6 +850,13 @@ def main():
         st.markdown("---")
         st.header("🎨 Plot Generation from Pre-Extracted Data")
         
+        # Custom names for imported data
+        custom_bigwig_names, custom_bed_names = setup_custom_names(
+            pre_extracted_data['group_names'], 
+            pre_extracted_data['bed_names_ordered'],
+            mode="imported"
+        )
+        
         # Settings for plotting
         with st.sidebar:
             st.header("🔧 Plot Settings")
@@ -824,11 +881,25 @@ def main():
                     step=0.1,
                     help="Maximum value for boxplot y-axis"
                 )
+            
+            # Export format settings
+            st.subheader("Export Settings")
+            export_format = st.selectbox(
+                "Export format:",
+                ["PNG", "PDF"],
+                help="Choose file format for plot downloads"
+            )
         
         signals_data = pre_extracted_data['signals_data']
         profile_data = pre_extracted_data['profile_data']
-        group_names = pre_extracted_data['group_names']
-        bed_names_ordered = pre_extracted_data['bed_names_ordered']
+        
+        # Use custom names
+        group_names = custom_bigwig_names
+        bed_names_ordered = custom_bed_names
+        
+        # Store plots in session state to prevent disappearing
+        if 'current_plots' not in st.session_state:
+            st.session_state.current_plots = {}
         
         # Generate plots instantly
         if plot_type in ["Boxplot", "Both"] and signals_data:
@@ -838,24 +909,22 @@ def main():
                     signals_dict = signals_data[0]
                 else:
                     signals_dict = signals_data
-                    
-                fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
                 
-                st.pyplot(fig_box)
-                plt.close(fig_box)
-                
-                # Download button for boxplot
-                buf = io.BytesIO()
+                # Create plot
                 fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
-                fig_box.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-                buf.seek(0)
-                plt.close(fig_box)
+                st.session_state.current_plots['boxplot'] = fig_box
+                
+                # Display plot
+                st.pyplot(fig_box, use_container_width=True)
+                
+                # Download button with format selection
+                plot_data, filename, mime_type = export_plot_with_format(fig_box, "signal_boxplot", export_format)
                 
                 st.download_button(
-                    label="📥 Download Boxplot",
-                    data=buf,
-                    file_name="signal_boxplot.png",
-                    mime="image/png"
+                    label=f"📥 Download Boxplot ({export_format})",
+                    data=plot_data,
+                    file_name=filename,
+                    mime=mime_type
                 )
                 
             except Exception as e:
@@ -865,24 +934,23 @@ def main():
         if plot_type in ["Line plot", "Both"] and profile_data:
             st.header("📈 Line Plot Results")
             try:
+                # Create plot
                 fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
                 
                 if fig_line:
-                    st.pyplot(fig_line)
-                    plt.close(fig_line)
+                    st.session_state.current_plots['lineplot'] = fig_line
                     
-                    # Download button for line plot
-                    buf = io.BytesIO()
-                    fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
-                    fig_line.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-                    buf.seek(0)
-                    plt.close(fig_line)
+                    # Display plot
+                    st.pyplot(fig_line, use_container_width=True)
+                    
+                    # Download button with format selection
+                    plot_data, filename, mime_type = export_plot_with_format(fig_line, "signal_lineplot", export_format)
                     
                     st.download_button(
-                        label="📥 Download Line Plot",
-                        data=buf,
-                        file_name="signal_lineplot.png",
-                        mime="image/png"
+                        label=f"📥 Download Line Plot ({export_format})",
+                        data=plot_data,
+                        file_name=filename,
+                        mime=mime_type
                     )
                 
             except Exception as e:
@@ -943,6 +1011,15 @@ def main():
             value=5000,
             step=100,
             help="Randomly sample if BED file has more regions",
+            disabled=st.session_state.analysis_running
+        )
+        
+        # Export format settings
+        st.subheader("Export Settings")
+        export_format = st.selectbox(
+            "Export format:",
+            ["PNG", "PDF"],
+            help="Choose file format for plot downloads",
             disabled=st.session_state.analysis_running
         )
     
@@ -1117,6 +1194,11 @@ def main():
                 progress_bar.progress(1.0)
                 status_text.text("Creating plots...")
                 
+                # Custom names setup
+                custom_bigwig_names, custom_bed_names = setup_custom_names(
+                    group_names, bed_names_ordered, mode="new_analysis"
+                )
+                
                 # Store analysis parameters for export
                 analysis_params = {
                     'plot_type': plot_type,
@@ -1127,32 +1209,32 @@ def main():
                     'line_bin_size': 20
                 }
                 
+                # Store plots in session state to prevent disappearing
+                if 'current_plots' not in st.session_state:
+                    st.session_state.current_plots = {}
+                
                 # Create plots
                 if plot_type in ["Boxplot", "Both"] and signals_data:
                     st.header("📊 Boxplot Results")
                     try:
-                        if len(group_names) == 1:
+                        if len(custom_bigwig_names) == 1:
                             signals_dict = signals_data[0]
                         else:
                             signals_dict = signals_data
                             
-                        fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
+                        fig_box = create_single_boxplot(signals_dict, custom_bigwig_names, custom_bed_names, y_max)
+                        st.session_state.current_plots['boxplot'] = fig_box
                         
-                        st.pyplot(fig_box)
-                        plt.close(fig_box)
+                        st.pyplot(fig_box, use_container_width=True)
                         
-                        # Download button for boxplot
-                        buf = io.BytesIO()
-                        fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
-                        fig_box.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-                        buf.seek(0)
-                        plt.close(fig_box)
+                        # Download button with format selection
+                        plot_data, filename, mime_type = export_plot_with_format(fig_box, "signal_boxplot", export_format)
                         
                         st.download_button(
-                            label="📥 Download Boxplot",
-                            data=buf,
-                            file_name="signal_boxplot.png",
-                            mime="image/png"
+                            label=f"📥 Download Boxplot ({export_format})",
+                            data=plot_data,
+                            file_name=filename,
+                            mime=mime_type
                         )
                         
                     except Exception as e:
@@ -1162,24 +1244,21 @@ def main():
                 if plot_type in ["Line plot", "Both"] and profile_data:
                     st.header("📈 Line Plot Results")
                     try:
-                        fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
+                        fig_line = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names)
                         
                         if fig_line:
-                            st.pyplot(fig_line)
-                            plt.close(fig_line)
+                            st.session_state.current_plots['lineplot'] = fig_line
                             
-                            # Download button for line plot
-                            buf = io.BytesIO()
-                            fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
-                            fig_line.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-                            buf.seek(0)
-                            plt.close(fig_line)
+                            st.pyplot(fig_line, use_container_width=True)
+                            
+                            # Download button with format selection
+                            plot_data, filename, mime_type = export_plot_with_format(fig_line, "signal_lineplot", export_format)
                             
                             st.download_button(
-                                label="📥 Download Line Plot",
-                                data=buf,
-                                file_name="signal_lineplot.png",
-                                mime="image/png"
+                                label=f"📥 Download Line Plot ({export_format})",
+                                data=plot_data,
+                                file_name=filename,
+                                mime=mime_type
                             )
                         
                     except Exception as e:
@@ -1192,7 +1271,7 @@ def main():
                 
                 try:
                     excel_buffer = export_signal_data_to_excel(
-                        signals_data, profile_data, group_names, bed_names_ordered, 
+                        signals_data, profile_data, custom_bigwig_names, custom_bed_names, 
                         bigwig_file_names, analysis_params
                     )
                     
