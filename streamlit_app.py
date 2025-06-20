@@ -46,7 +46,11 @@ def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
                     key=f"{mode}_bigwig_name_{i}",
                     help=f"Original: {name}"
                 )
-                custom_bigwig_names.append(custom_name if custom_name.strip() else name)
+                # Validate custom name
+                clean_name = custom_name.strip() if custom_name else name
+                if not clean_name:
+                    clean_name = name
+                custom_bigwig_names.append(clean_name)
         
         with col2:
             st.subheader("BED File Names")
@@ -58,7 +62,18 @@ def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
                     key=f"{mode}_bed_name_{i}",
                     help=f"Original: {name}"
                 )
-                custom_bed_names.append(custom_name if custom_name.strip() else name)
+                # Validate custom name
+                clean_name = custom_name.strip() if custom_name else name
+                if not clean_name:
+                    clean_name = name
+                custom_bed_names.append(clean_name)
+        
+        # Validate for duplicates
+        if len(set(custom_bigwig_names)) != len(custom_bigwig_names):
+            st.warning("⚠️ BigWig names contain duplicates. This may cause plotting issues.")
+        
+        if len(set(custom_bed_names)) != len(custom_bed_names):
+            st.warning("⚠️ BED names contain duplicates. This may cause plotting issues.")
         
         return custom_bigwig_names, custom_bed_names
 
@@ -151,7 +166,7 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
                 boxplot_df = pd.DataFrame(boxplot_data)
                 boxplot_df.to_excel(writer, sheet_name='Boxplot_Signals', index=False)
         
-        # Sheet 3: Line Plot Profile Data
+        # Sheet 3: Line Plot Profile Data - FIXED VERSION
         if profile_data:
             for bigwig_idx, bigwig_group in enumerate(group_names):
                 profile_dict = profile_data[bigwig_idx]
@@ -160,20 +175,25 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
                     if bed_name in profile_dict and profile_dict[bed_name] is not None:
                         profile_info = profile_dict[bed_name]
                         
-                        # Create DataFrame for this combination
-                        profile_df = pd.DataFrame({
+                        # Create base DataFrame
+                        base_data = {
                             'Position': profile_info['positions'],
                             'Mean_Signal': profile_info['mean_signal'],
                             'Std_Signal': profile_info['std_signal'],
                             'N_Regions': profile_info['n_regions'],
                             'BigWig_Group': bigwig_group,
                             'BED_File': bed_name
-                        })
+                        }
                         
-                        # Add individual region profiles as additional columns
+                        # FIXED: Create region columns efficiently using pd.concat
                         all_profiles = profile_info['all_profiles']
+                        region_data = {}
                         for i in range(min(all_profiles.shape[0], 100)):  # Limit to first 100 regions
-                            profile_df[f'Region_{i+1}'] = all_profiles[i, :]
+                            region_data[f'Region_{i+1}'] = all_profiles[i, :]
+                        
+                        # Combine all data at once
+                        all_data = {**base_data, **region_data}
+                        profile_df = pd.DataFrame(all_data)
                         
                         # Create safe sheet name
                         safe_bigwig = bigwig_group.replace('/', '_').replace('\\', '_')[:10]
@@ -657,19 +677,65 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
         df = pd.DataFrame(plot_data)
         available_groups = bed_names_ordered  # Use ordered names
         
+        # Check if we have data to plot
+        if df.empty:
+            raise ValueError("No data available for plotting")
+        
         fig, ax = plt.subplots(figsize=(max(12, len(available_groups) * 1.5), 6))
         
-        # IMPORTANT: Use hue_order parameter to preserve BigWig upload order
-        box_plot = sns.boxplot(data=df, x='Group', y='Signal', hue='BigWig',
-                              order=available_groups,
-                              hue_order=bigwig_names,  # This ensures upload order is preserved!
-                              palette=['lightblue', 'lightcoral', 'lightgreen', 'lightyellow'][:len(bigwig_names)],
-                              showfliers=False,
-                              ax=ax)
+        # FIXED: Use explicit boxplot parameters to avoid seaborn issues
+        try:
+            box_plot = sns.boxplot(
+                data=df, 
+                x='Group', 
+                y='Signal', 
+                hue='BigWig',
+                order=available_groups,
+                hue_order=bigwig_names,  # This ensures upload order is preserved!
+                palette=['lightblue', 'lightcoral', 'lightgreen', 'lightyellow'][:len(bigwig_names)],
+                showfliers=False,
+                ax=ax,
+                # Add explicit box styling to avoid seaborn internal issues
+                boxprops=dict(alpha=0.7),
+                whiskerprops=dict(alpha=0.7),
+                capprops=dict(alpha=0.7),
+                medianprops=dict(alpha=0.7)
+            )
+        except Exception as e:
+            # Fallback: create simpler boxplot without hue
+            st.warning(f"Creating simplified boxplot due to: {e}")
+            
+            # Reshape data for simple plotting
+            simple_data = []
+            for group_name in available_groups:
+                group_data = df[df['Group'] == group_name]
+                if not group_data.empty:
+                    for bigwig_name in bigwig_names:
+                        bigwig_data = group_data[group_data['BigWig'] == bigwig_name]
+                        if not bigwig_data.empty:
+                            combined_name = f"{group_name}\n({bigwig_name})"
+                            for signal in bigwig_data['Signal']:
+                                simple_data.append({
+                                    'Combined_Group': combined_name,
+                                    'Signal': signal
+                                })
+            
+            simple_df = pd.DataFrame(simple_data)
+            box_plot = sns.boxplot(
+                data=simple_df, 
+                x='Combined_Group', 
+                y='Signal',
+                palette='Set2',
+                showfliers=False,
+                ax=ax
+            )
         
         ax.set_title(f'Signal Distribution Comparison at Peak Centers\nAcross Uploaded BED Files', 
                     fontsize=14, fontweight='bold', pad=20)
-        ax.legend(title='BigWig Groups', loc='upper right')
+        
+        # Only add legend if we successfully created the hue plot
+        if 'BigWig' in df.columns and len(df['BigWig'].unique()) > 1:
+            ax.legend(title='BigWig Groups', loc='upper right')
     
     ax.set_xlabel('BED File Groups', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Signal', fontsize=12, fontweight='bold')
