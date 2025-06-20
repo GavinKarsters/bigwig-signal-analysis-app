@@ -631,23 +631,32 @@ def extract_signals_for_profile(bigwig_file_groups, bed_file, extend=2000, max_r
         'n_regions': valid_regions
     }
 
-def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_max):
+def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_max, original_bed_names=None):
     """Create boxplot for single or multiple bigwig signals across groups"""
     
     plot_data = []
     
+    # Create mapping from custom names to original names if provided
+    if original_bed_names is not None:
+        name_mapping = dict(zip(bed_names_ordered, original_bed_names))
+    else:
+        name_mapping = {name: name for name in bed_names_ordered}
+    
     # Handle single vs multiple bigwigs
     if len(bigwig_names) == 1:
         # Single bigwig - use ordered bed names
-        for group_name, signals in signals_dict.items():
-            for signal in signals:
-                plot_data.append({
-                    'Group': group_name,
-                    'Signal': signal
-                })
+        for custom_name in bed_names_ordered:
+            original_name = name_mapping[custom_name]
+            if original_name in signals_dict:
+                signals = signals_dict[original_name]
+                for signal in signals:
+                    plot_data.append({
+                        'Group': custom_name,  # Use custom name for display
+                        'Signal': signal
+                    })
         
         df = pd.DataFrame(plot_data)
-        available_groups = bed_names_ordered  # Use ordered names
+        available_groups = bed_names_ordered  # Use custom names for ordering
         
         fig, ax = plt.subplots(figsize=(max(8, len(available_groups) * 1.2), 6))
         
@@ -662,20 +671,21 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
         
     else:
         # Multiple bigwigs - create paired comparison
-        # IMPORTANT: Iterate through bigwig_names in order to preserve upload order
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
-            # Make sure we use the signals_dict in the same order as bigwig_names
             signals_dict_for_bigwig = signals_dict[bigwig_idx]
-            for group_name, signals in signals_dict_for_bigwig.items():
-                for signal in signals:
-                    plot_data.append({
-                        'Group': group_name,
-                        'BigWig': bigwig_name,  # This preserves the upload order
-                        'Signal': signal
-                    })
+            for custom_name in bed_names_ordered:
+                original_name = name_mapping[custom_name]
+                if original_name in signals_dict_for_bigwig:
+                    signals = signals_dict_for_bigwig[original_name]
+                    for signal in signals:
+                        plot_data.append({
+                            'Group': custom_name,  # Use custom name for display
+                            'BigWig': bigwig_name,
+                            'Signal': signal
+                        })
         
         df = pd.DataFrame(plot_data)
-        available_groups = bed_names_ordered  # Use ordered names
+        available_groups = bed_names_ordered  # Use custom names for ordering
         
         # Check if we have data to plot
         if df.empty:
@@ -747,21 +757,28 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
     plt.tight_layout()
     return fig
 
-def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered):
+def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered, original_bed_names=None):
     """Create line plot with separate subplots for each group - PRESERVING BED FILE ORDER"""
     
-    # Use the ordered bed names instead of dictionary keys
+    # Create mapping from custom names to original names if provided
+    if original_bed_names is not None:
+        name_mapping = dict(zip(bed_names_ordered, original_bed_names))
+    else:
+        name_mapping = {name: name for name in bed_names_ordered}
+    
+    # Use the ordered bed names and check for valid data using original names
     valid_groups = []
-    for bed_name in bed_names_ordered:
-        # Check if this bed file has valid data in all bigwigs
-        if len(bigwig_names) == 1:
-            if bed_name in profile_dict_list[0] and profile_dict_list[0][bed_name] is not None:
-                valid_groups.append(bed_name)
-        else:
-            # For multiple bigwigs, check if all have this bed file
-            if all(bed_name in profile_dict_list[i] and profile_dict_list[i][bed_name] is not None 
-                   for i in range(len(profile_dict_list))):
-                valid_groups.append(bed_name)
+    for custom_name in bed_names_ordered:
+        original_name = name_mapping[custom_name]
+        # Check if this bed file has valid data in ALL bigwigs
+        has_data = True
+        for bigwig_idx in range(len(bigwig_names)):
+            if original_name not in profile_dict_list[bigwig_idx] or profile_dict_list[bigwig_idx][original_name] is None:
+                has_data = False
+                break
+        
+        if has_data:
+            valid_groups.append((custom_name, original_name))
     
     if not valid_groups:
         st.error("No valid profiles to plot")
@@ -795,12 +812,12 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
     colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D'][:len(bigwig_names)]
     
     # Plot each group in its own subplot - USING ORDERED GROUPS
-    for idx, group_name in enumerate(valid_groups):
+    for idx, (custom_name, original_name) in enumerate(valid_groups):
         ax = axes[idx]
         
         # IMPORTANT: Iterate through bigwig_names in order to preserve upload order
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
-            profile_data = profile_dict_list[bigwig_idx][group_name]
+            profile_data = profile_dict_list[bigwig_idx][original_name]
             
             if profile_data is not None:
                 positions = profile_data['positions']
@@ -824,8 +841,8 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered)
                                color=colors[bigwig_idx], 
                                alpha=0.15)
         
-        # Customize individual subplot
-        ax.set_title(f"{group_name}", fontsize=11, fontweight='bold')
+        # Customize individual subplot - use custom name for title
+        ax.set_title(f"{custom_name}", fontsize=11, fontweight='bold')
         ax.axvline(x=0, color='black', linestyle=':', alpha=0.5, linewidth=1)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(positions[0], positions[-1])
@@ -959,9 +976,9 @@ def main():
         signals_data = pre_extracted_data['signals_data']
         profile_data = pre_extracted_data['profile_data']
         
-        # Use custom names
-        group_names = custom_bigwig_names
-        bed_names_ordered = custom_bed_names
+        # Store original names for data lookup
+        original_bed_names = pre_extracted_data['bed_names_ordered']
+        original_group_names = pre_extracted_data['group_names']
         
         # Store plots in session state to prevent disappearing
         if 'current_plots' not in st.session_state:
@@ -971,13 +988,19 @@ def main():
         if plot_type in ["Boxplot", "Both"] and signals_data:
             st.header("📊 Boxplot Results")
             try:
-                if len(group_names) == 1:
+                if len(original_group_names) == 1:
                     signals_dict = signals_data[0]
                 else:
                     signals_dict = signals_data
                 
-                # Create plot
-                fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
+                # Create plot with name mapping
+                fig_box = create_single_boxplot(
+                    signals_dict, 
+                    custom_bigwig_names, 
+                    custom_bed_names, 
+                    y_max, 
+                    original_bed_names=original_bed_names
+                )
                 st.session_state.current_plots['boxplot'] = fig_box
                 
                 # Display plot
@@ -1000,8 +1023,13 @@ def main():
         if plot_type in ["Line plot", "Both"] and profile_data:
             st.header("📈 Line Plot Results")
             try:
-                # Create plot
-                fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
+                # Create plot with name mapping
+                fig_line = create_subplot_line_plot(
+                    profile_data, 
+                    custom_bigwig_names, 
+                    custom_bed_names, 
+                    original_bed_names=original_bed_names
+                )
                 
                 if fig_line:
                     st.session_state.current_plots['lineplot'] = fig_line
