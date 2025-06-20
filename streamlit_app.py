@@ -11,6 +11,7 @@ import tempfile
 import io
 from pathlib import Path
 import time
+import json
 
 # Set page config
 st.set_page_config(
@@ -26,6 +27,227 @@ def save_uploaded_file(uploaded_file, temp_dir):
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     return file_path
+
+def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_names_ordered, 
+                                bigwig_file_names, analysis_params):
+    """Export all extracted signal data to Excel file with metadata"""
+    
+    output = io.BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        
+        # Sheet 1: Metadata
+        metadata = {
+            'Parameter': [
+                'Analysis Date',
+                'BigWig Files (Upload Order)', 
+                'BED Files (Upload Order)',
+                'BigWig Groups',
+                'Plot Type',
+                'Y-axis Maximum',
+                'Signal Window (bp)',
+                'Max Regions per BED',
+                'Line Plot Extend (bp)',
+                'Line Plot Bin Size (bp)'
+            ],
+            'Value': [
+                pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                ' | '.join(bigwig_file_names),
+                ' | '.join(bed_names_ordered),
+                ' | '.join(group_names),
+                analysis_params.get('plot_type', 'Unknown'),
+                analysis_params.get('y_max', 'Unknown'),
+                analysis_params.get('extend_bp', 'Unknown'),
+                analysis_params.get('max_regions', 'Unknown'),
+                analysis_params.get('line_extend', 2000),
+                analysis_params.get('line_bin_size', 20)
+            ]
+        }
+        
+        metadata_df = pd.DataFrame(metadata)
+        metadata_df.to_excel(writer, sheet_name='Metadata', index=False)
+        
+        # Sheet 2: Boxplot Signal Data
+        if signals_data:
+            boxplot_data = []
+            
+            if len(group_names) == 1:
+                # Single BigWig group
+                signals_dict = signals_data[0]
+                for bed_name in bed_names_ordered:
+                    if bed_name in signals_dict:
+                        for i, signal in enumerate(signals_dict[bed_name]):
+                            boxplot_data.append({
+                                'BigWig_Group': group_names[0],
+                                'BED_File': bed_name,
+                                'Region_Index': i,
+                                'Signal_Value': signal
+                            })
+            else:
+                # Multiple BigWig groups
+                for bigwig_idx, bigwig_group in enumerate(group_names):
+                    signals_dict = signals_data[bigwig_idx]
+                    for bed_name in bed_names_ordered:
+                        if bed_name in signals_dict:
+                            for i, signal in enumerate(signals_dict[bed_name]):
+                                boxplot_data.append({
+                                    'BigWig_Group': bigwig_group,
+                                    'BED_File': bed_name,
+                                    'Region_Index': i,
+                                    'Signal_Value': signal
+                                })
+            
+            if boxplot_data:
+                boxplot_df = pd.DataFrame(boxplot_data)
+                boxplot_df.to_excel(writer, sheet_name='Boxplot_Signals', index=False)
+        
+        # Sheet 3: Line Plot Profile Data
+        if profile_data:
+            for bigwig_idx, bigwig_group in enumerate(group_names):
+                profile_dict = profile_data[bigwig_idx]
+                
+                for bed_name in bed_names_ordered:
+                    if bed_name in profile_dict and profile_dict[bed_name] is not None:
+                        profile_info = profile_dict[bed_name]
+                        
+                        # Create DataFrame for this combination
+                        profile_df = pd.DataFrame({
+                            'Position': profile_info['positions'],
+                            'Mean_Signal': profile_info['mean_signal'],
+                            'Std_Signal': profile_info['std_signal'],
+                            'N_Regions': profile_info['n_regions'],
+                            'BigWig_Group': bigwig_group,
+                            'BED_File': bed_name
+                        })
+                        
+                        # Add individual region profiles as additional columns
+                        all_profiles = profile_info['all_profiles']
+                        for i in range(min(all_profiles.shape[0], 100)):  # Limit to first 100 regions
+                            profile_df[f'Region_{i+1}'] = all_profiles[i, :]
+                        
+                        sheet_name = f'Profile_{bigwig_group}_{bed_name}'[:31]  # Excel sheet name limit
+                        profile_df.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+    output.seek(0)
+    return output
+
+def load_signal_data_from_excel(uploaded_file):
+    """Load signal data from uploaded Excel file"""
+    
+    try:
+        # Read metadata
+        metadata_df = pd.read_excel(uploaded_file, sheet_name='Metadata')
+        metadata_dict = dict(zip(metadata_df['Parameter'], metadata_df['Value']))
+        
+        # Parse metadata
+        bigwig_file_names = metadata_dict['BigWig Files (Upload Order)'].split(' | ')
+        bed_names_ordered = metadata_dict['BED Files (Upload Order)'].split(' | ')
+        group_names = metadata_dict['BigWig Groups'].split(' | ')
+        
+        analysis_params = {
+            'plot_type': metadata_dict.get('Plot Type', 'Both'),
+            'y_max': float(metadata_dict.get('Y-axis Maximum', 25.0)),
+            'extend_bp': int(metadata_dict.get('Signal Window (bp)', 500)),
+            'max_regions': int(metadata_dict.get('Max Regions per BED', 5000)),
+            'line_extend': int(metadata_dict.get('Line Plot Extend (bp)', 2000)),
+            'line_bin_size': int(metadata_dict.get('Line Plot Bin Size (bp)', 20))
+        }
+        
+        # Read boxplot data
+        signals_data = None
+        try:
+            boxplot_df = pd.read_excel(uploaded_file, sheet_name='Boxplot_Signals')
+            
+            if len(group_names) == 1:
+                # Single BigWig group
+                signals_dict = {}
+                for bed_name in bed_names_ordered:
+                    bed_data = boxplot_df[boxplot_df['BED_File'] == bed_name]
+                    if not bed_data.empty:
+                        signals_dict[bed_name] = bed_data['Signal_Value'].tolist()
+                signals_data = [signals_dict]
+            else:
+                # Multiple BigWig groups
+                signals_data = []
+                for group_name in group_names:
+                    signals_dict = {}
+                    group_data = boxplot_df[boxplot_df['BigWig_Group'] == group_name]
+                    for bed_name in bed_names_ordered:
+                        bed_data = group_data[group_data['BED_File'] == bed_name]
+                        if not bed_data.empty:
+                            signals_dict[bed_name] = bed_data['Signal_Value'].tolist()
+                    signals_data.append(signals_dict)
+        
+        except Exception as e:
+            st.warning(f"Could not load boxplot data: {e}")
+            signals_data = None
+        
+        # Read profile data
+        profile_data = None
+        try:
+            # Get all sheet names that start with 'Profile_'
+            excel_file = pd.ExcelFile(uploaded_file)
+            profile_sheets = [sheet for sheet in excel_file.sheet_names if sheet.startswith('Profile_')]
+            
+            if profile_sheets:
+                profile_data = []
+                
+                for group_name in group_names:
+                    profile_dict = {}
+                    
+                    for bed_name in bed_names_ordered:
+                        # Find matching sheet
+                        sheet_pattern = f'Profile_{group_name}_{bed_name}'
+                        matching_sheet = None
+                        for sheet in profile_sheets:
+                            if sheet.startswith(sheet_pattern):
+                                matching_sheet = sheet
+                                break
+                        
+                        if matching_sheet:
+                            profile_df = pd.read_excel(uploaded_file, sheet_name=matching_sheet)
+                            
+                            # Extract individual region profiles
+                            region_cols = [col for col in profile_df.columns if col.startswith('Region_')]
+                            all_profiles = []
+                            for col in region_cols:
+                                all_profiles.append(profile_df[col].values)
+                            
+                            if all_profiles:
+                                all_profiles = np.array(all_profiles)
+                            else:
+                                # Create dummy profiles from mean
+                                all_profiles = np.array([profile_df['Mean_Signal'].values])
+                            
+                            profile_info = {
+                                'positions': profile_df['Position'].values,
+                                'mean_signal': profile_df['Mean_Signal'].values,
+                                'std_signal': profile_df['Std_Signal'].values,
+                                'all_profiles': all_profiles,
+                                'n_regions': int(profile_df['N_Regions'].iloc[0])
+                            }
+                            
+                            profile_dict[bed_name] = profile_info
+                    
+                    profile_data.append(profile_dict)
+        
+        except Exception as e:
+            st.warning(f"Could not load profile data: {e}")
+            profile_data = None
+        
+        return {
+            'signals_data': signals_data,
+            'profile_data': profile_data,
+            'group_names': group_names,
+            'bed_names_ordered': bed_names_ordered,
+            'bigwig_file_names': bigwig_file_names,
+            'analysis_params': analysis_params,
+            'metadata': metadata_dict
+        }
+    
+    except Exception as e:
+        st.error(f"Error loading Excel file: {e}")
+        return None
 
 def setup_replicate_groups(bigwig_files):
     """Setup UI for defining replicate groups"""
@@ -115,6 +337,7 @@ def setup_replicate_groups(bigwig_files):
     
     return new_groups
 
+# [Keep all the extraction functions exactly the same as before]
 def extract_signals_fast(bigwig_file_groups, bed_file, extend=500, max_regions=5000):
     """Extract signals for boxplots - peak center only, with replicate averaging"""
     
@@ -494,7 +717,150 @@ def main():
     - **Boxplots**: Show signal distribution at peak centers (±500bp, customizable)
     - **Line plots**: Show signal profiles across regions (±2000bp, auto-scaled)
     - **Replicate Averaging**: Automatically average biological replicates during signal extraction
+    - **🆕 Signal Matrix Export/Import**: Export extracted signals and re-import for instant plotting
     """)
+    
+    # Check if we have pre-extracted data
+    pre_extracted_data = None
+    
+    st.header("🔄 Import Pre-Extracted Signal Data (Optional)")
+    st.info("Upload a previously exported Excel file to skip signal extraction and go directly to plotting.")
+    
+    uploaded_excel = st.file_uploader(
+        "Choose exported signal data file:",
+        type=['xlsx'],
+        help="Upload an Excel file previously exported from this tool",
+        key="excel_uploader"
+    )
+    
+    if uploaded_excel:
+        with st.spinner("Loading pre-extracted data..."):
+            pre_extracted_data = load_signal_data_from_excel(uploaded_excel)
+        
+        if pre_extracted_data:
+            st.success("✅ Successfully loaded pre-extracted data!")
+            
+            # Show summary
+            st.write("**Data Summary:**")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Original BigWig Files:**")
+                for i, name in enumerate(pre_extracted_data['bigwig_file_names'], 1):
+                    st.write(f"{i}. {name}")
+                
+                st.write("**BigWig Groups:**")
+                for i, name in enumerate(pre_extracted_data['group_names'], 1):
+                    st.write(f"{i}. {name}")
+            
+            with col2:
+                st.write("**Original BED Files:**")
+                for i, name in enumerate(pre_extracted_data['bed_names_ordered'], 1):
+                    st.write(f"{i}. {name}")
+                
+                st.write("**Analysis Date:**")
+                st.write(pre_extracted_data['metadata'].get('Analysis Date', 'Unknown'))
+    
+    # If we have pre-extracted data, skip to plotting
+    if pre_extracted_data:
+        st.markdown("---")
+        st.header("🎨 Plot Generation from Pre-Extracted Data")
+        
+        # Settings for plotting
+        with st.sidebar:
+            st.header("🔧 Plot Settings")
+            
+            # Use original plot type or allow override
+            original_plot_type = pre_extracted_data['analysis_params'].get('plot_type', 'Both')
+            plot_type = st.selectbox(
+                "Select plot type:",
+                ["Boxplot", "Line plot", "Both"],
+                index=["Boxplot", "Line plot", "Both"].index(original_plot_type) if original_plot_type in ["Boxplot", "Line plot", "Both"] else 0,
+                help="Choose the type of visualization"
+            )
+            
+            # Boxplot settings
+            if plot_type in ["Boxplot", "Both"]:
+                st.subheader("Boxplot Settings")
+                original_y_max = pre_extracted_data['analysis_params'].get('y_max', 25.0)
+                y_max = st.number_input(
+                    "Y-axis maximum:",
+                    min_value=0.1,
+                    value=float(original_y_max),
+                    step=0.1,
+                    help="Maximum value for boxplot y-axis"
+                )
+        
+        signals_data = pre_extracted_data['signals_data']
+        profile_data = pre_extracted_data['profile_data']
+        group_names = pre_extracted_data['group_names']
+        bed_names_ordered = pre_extracted_data['bed_names_ordered']
+        
+        # Generate plots instantly
+        if plot_type in ["Boxplot", "Both"] and signals_data:
+            st.header("📊 Boxplot Results")
+            try:
+                if len(group_names) == 1:
+                    signals_dict = signals_data[0]
+                else:
+                    signals_dict = signals_data
+                    
+                fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
+                
+                st.pyplot(fig_box)
+                plt.close(fig_box)
+                
+                # Download button for boxplot
+                buf = io.BytesIO()
+                fig_box = create_single_boxplot(signals_dict, group_names, bed_names_ordered, y_max)
+                fig_box.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+                buf.seek(0)
+                plt.close(fig_box)
+                
+                st.download_button(
+                    label="📥 Download Boxplot",
+                    data=buf,
+                    file_name="signal_boxplot.png",
+                    mime="image/png"
+                )
+                
+            except Exception as e:
+                st.error(f"Error creating boxplot: {e}")
+                st.exception(e)
+        
+        if plot_type in ["Line plot", "Both"] and profile_data:
+            st.header("📈 Line Plot Results")
+            try:
+                fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
+                
+                if fig_line:
+                    st.pyplot(fig_line)
+                    plt.close(fig_line)
+                    
+                    # Download button for line plot
+                    buf = io.BytesIO()
+                    fig_line = create_subplot_line_plot(profile_data, group_names, bed_names_ordered)
+                    fig_line.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+                    buf.seek(0)
+                    plt.close(fig_line)
+                    
+                    st.download_button(
+                        label="📥 Download Line Plot",
+                        data=buf,
+                        file_name="signal_lineplot.png",
+                        mime="image/png"
+                    )
+                
+            except Exception as e:
+                st.error(f"Error creating line plot: {e}")
+                st.exception(e)
+        
+        return  # Skip the rest of the UI
+    
+    # Original analysis workflow
+    st.markdown("---")
+    st.header("🔬 New Analysis")
+    st.info("Upload BigWig and BED files to perform signal extraction and analysis.")
     
     # Initialize analysis state
     if 'analysis_running' not in st.session_state:
@@ -630,9 +996,11 @@ def main():
             try:
                 # Save uploaded files
                 bigwig_paths = []
+                bigwig_file_names = []
                 for bw_file in bigwig_files:
                     bw_path = save_uploaded_file(bw_file, temp_dir)
                     bigwig_paths.append(bw_path)
+                    bigwig_file_names.append(bw_file.name)
                 
                 bed_paths = []
                 bed_names = []
@@ -715,6 +1083,16 @@ def main():
                 progress_bar.progress(1.0)
                 status_text.text("Creating plots...")
                 
+                # Store analysis parameters for export
+                analysis_params = {
+                    'plot_type': plot_type,
+                    'y_max': y_max if plot_type in ["Boxplot", "Both"] else None,
+                    'extend_bp': extend_bp if plot_type in ["Boxplot", "Both"] else None,
+                    'max_regions': max_regions,
+                    'line_extend': 2000,
+                    'line_bin_size': 20
+                }
+                
                 # Create plots
                 if plot_type in ["Boxplot", "Both"] and signals_data:
                     st.header("📊 Boxplot Results")
@@ -773,6 +1151,34 @@ def main():
                     except Exception as e:
                         st.error(f"Error creating line plot: {e}")
                         st.exception(e)
+                
+                # Export signal data to Excel
+                st.header("💾 Export Signal Data")
+                st.info("Export extracted signal data to Excel file for future use. This allows you to skip signal extraction and generate plots instantly.")
+                
+                try:
+                    excel_buffer = export_signal_data_to_excel(
+                        signals_data, profile_data, group_names, bed_names_ordered, 
+                        bigwig_file_names, analysis_params
+                    )
+                    
+                    # Generate filename with timestamp
+                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+                    filename = f"bigwig_signal_data_{timestamp}.xlsx"
+                    
+                    st.download_button(
+                        label="📊 Download Signal Data (Excel)",
+                        data=excel_buffer,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        help="Download extracted signal data for future analysis"
+                    )
+                    
+                    st.success("✅ Signal data export ready! You can re-upload this file later to skip signal extraction.")
+                    
+                except Exception as e:
+                    st.error(f"Error exporting signal data: {e}")
+                    st.exception(e)
                 
                 status_text.text("✅ Analysis complete!")
                 
