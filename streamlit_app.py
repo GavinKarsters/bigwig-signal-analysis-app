@@ -148,10 +148,6 @@ def load_signal_data_from_excel(uploaded_file):
         bed_names_ordered = metadata_dict['BED Files (Upload Order)'].split(' | ')
         group_names = metadata_dict['BigWig Groups'].split(' | ')
         
-        st.write("**Debug Info:**")
-        st.write(f"BigWig Groups: {group_names}")
-        st.write(f"BED Files: {bed_names_ordered}")
-        
         analysis_params = {
             'plot_type': metadata_dict.get('Plot Type', 'Both'),
             'y_max': float(metadata_dict.get('Y-axis Maximum', 25.0)),
@@ -190,14 +186,12 @@ def load_signal_data_from_excel(uploaded_file):
             st.warning(f"Could not load boxplot data: {e}")
             signals_data = None
         
-        # Read profile data - IMPROVED LOGIC
+        # Read profile data
         profile_data = None
         try:
             # Get all sheet names that start with 'Profile_'
             excel_file = pd.ExcelFile(uploaded_file)
             profile_sheets = [sheet for sheet in excel_file.sheet_names if sheet.startswith('Profile_')]
-            
-            st.write(f"**Found Profile Sheets:** {profile_sheets}")
             
             if profile_sheets:
                 profile_data = []
@@ -240,8 +234,6 @@ def load_signal_data_from_excel(uploaded_file):
                                     matching_sheet = sheet
                                     break
                         
-                        st.write(f"Group: {group_name}, BED: {bed_name} -> Sheet: {matching_sheet}")
-                        
                         if matching_sheet:
                             try:
                                 profile_df = pd.read_excel(uploaded_file, sheet_name=matching_sheet)
@@ -267,22 +259,14 @@ def load_signal_data_from_excel(uploaded_file):
                                 }
                                 
                                 profile_dict[bed_name] = profile_info
-                                st.success(f"✅ Loaded profile for {group_name} - {bed_name}")
                                 
                             except Exception as e:
-                                st.error(f"Error loading sheet {matching_sheet}: {e}")
-                        else:
-                            st.warning(f"❌ No matching sheet found for {group_name} - {bed_name}")
+                                st.error(f"Error loading profile data for {group_name} - {bed_name}: {e}")
                     
                     profile_data.append(profile_dict)
-                
-                st.write(f"**Final Profile Data Structure:**")
-                for i, group_dict in enumerate(profile_data):
-                    st.write(f"Group {i} ({group_names[i]}): {list(group_dict.keys())}")
         
         except Exception as e:
             st.error(f"Error loading profile data: {e}")
-            st.exception(e)
             profile_data = None
         
         return {
@@ -297,7 +281,6 @@ def load_signal_data_from_excel(uploaded_file):
     
     except Exception as e:
         st.error(f"Error loading Excel file: {e}")
-        st.exception(e)
         return None
 
 def setup_replicate_groups(bigwig_files):
