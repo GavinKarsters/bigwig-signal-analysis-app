@@ -256,12 +256,14 @@ def load_signal_data_from_excel(uploaded_file):
             st.warning(f"Could not load boxplot data: {e}")
             signals_data = None
         
-        # Read profile data
+        # FIXED: Read profile data with better debugging
         profile_data = None
         try:
             # Get all sheet names that start with 'Profile_'
             excel_file = pd.ExcelFile(uploaded_file)
             profile_sheets = [sheet for sheet in excel_file.sheet_names if sheet.startswith('Profile_')]
+            
+            st.write(f"DEBUG: Found {len(profile_sheets)} profile sheets: {profile_sheets}")
             
             if profile_sheets:
                 profile_data = []
@@ -269,7 +271,11 @@ def load_signal_data_from_excel(uploaded_file):
                 for group_idx, group_name in enumerate(group_names):
                     profile_dict = {}
                     
+                    st.write(f"DEBUG: Processing group {group_idx}: {group_name}")
+                    
                     for bed_name in bed_names_ordered:
+                        st.write(f"DEBUG: Looking for BED {bed_name} in group {group_name}")
+                        
                         # Try multiple matching strategies
                         matching_sheet = None
                         
@@ -286,25 +292,30 @@ def load_signal_data_from_excel(uploaded_file):
                         # Strategy 2: Partial match on group name
                         if not matching_sheet:
                             for sheet in profile_sheets:
-                                if group_name in sheet and bed_name in sheet:
+                                if safe_bigwig in sheet and safe_bed in sheet:
                                     matching_sheet = sheet
                                     break
                         
-                        # Strategy 3: Fuzzy match - find sheet containing both names
+                        # Strategy 3: Look for any sheet that contains both group and bed identifiers
                         if not matching_sheet:
                             for sheet in profile_sheets:
-                                # Check if both group and bed name components are in sheet name
+                                # Extract parts from the original names for better matching
                                 group_parts = group_name.replace('_', ' ').split()
                                 bed_parts = bed_name.replace('_', ' ').split()
                                 
-                                group_match = any(part in sheet for part in group_parts if len(part) > 2)
-                                bed_match = any(part in sheet for part in bed_parts if len(part) > 2)
+                                # Look for meaningful parts (longer than 2 chars)
+                                group_keywords = [part for part in group_parts if len(part) > 2]
+                                bed_keywords = [part for part in bed_parts if len(part) > 2]
+                                
+                                group_match = any(keyword.lower() in sheet.lower() for keyword in group_keywords)
+                                bed_match = any(keyword.lower() in sheet.lower() for keyword in bed_keywords)
                                 
                                 if group_match and bed_match:
                                     matching_sheet = sheet
                                     break
                         
                         if matching_sheet:
+                            st.write(f"DEBUG: Found matching sheet: {matching_sheet}")
                             try:
                                 profile_df = pd.read_excel(uploaded_file, sheet_name=matching_sheet)
                                 
@@ -329,11 +340,15 @@ def load_signal_data_from_excel(uploaded_file):
                                 }
                                 
                                 profile_dict[bed_name] = profile_info
+                                st.write(f"DEBUG: Successfully loaded profile for {bed_name} with n_regions={profile_info['n_regions']}")
                                 
                             except Exception as e:
-                                st.error(f"Error loading profile data for {group_name} - {bed_name}: {e}")
+                                st.error(f"Error loading profile data from sheet {matching_sheet}: {e}")
+                        else:
+                            st.warning(f"DEBUG: No matching sheet found for group {group_name}, bed {bed_name}")
                     
                     profile_data.append(profile_dict)
+                    st.write(f"DEBUG: Group {group_idx} profile_dict keys: {list(profile_dict.keys())}")
         
         except Exception as e:
             st.error(f"Error loading profile data: {e}")
@@ -766,18 +781,20 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     else:
         name_mapping = {name: name for name in bed_names_ordered}
     
-    # Use the ordered bed names and check for valid data using original names
+    # FIXED: Check each BED file individually per BigWig group
     valid_groups = []
     for custom_name in bed_names_ordered:
         original_name = name_mapping[custom_name]
-        # Check if this bed file has valid data in ALL bigwigs
-        has_data = True
+        
+        # Check if at least one BigWig group has data for this BED file
+        has_data_in_any_bigwig = False
         for bigwig_idx in range(len(bigwig_names)):
-            if original_name not in profile_dict_list[bigwig_idx] or profile_dict_list[bigwig_idx][original_name] is None:
-                has_data = False
+            if (original_name in profile_dict_list[bigwig_idx] and 
+                profile_dict_list[bigwig_idx][original_name] is not None):
+                has_data_in_any_bigwig = True
                 break
         
-        if has_data:
+        if has_data_in_any_bigwig:
             valid_groups.append((custom_name, original_name))
     
     if not valid_groups:
@@ -785,6 +802,7 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
         return None
     
     n_groups = len(valid_groups)
+    st.write(f"DEBUG: Found {n_groups} valid groups to plot: {[g[0] for g in valid_groups]}")
     
     # Calculate subplot layout
     if n_groups <= 3:
@@ -815,15 +833,22 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     for idx, (custom_name, original_name) in enumerate(valid_groups):
         ax = axes[idx]
         
-        # IMPORTANT: Iterate through bigwig_names in order to preserve upload order
+        st.write(f"DEBUG: Plotting subplot {idx} for {custom_name} (original: {original_name})")
+        
+        # Plot data for each BigWig that has this BED file
+        plotted_any = False
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
-            profile_data = profile_dict_list[bigwig_idx][original_name]
-            
-            if profile_data is not None:
+            if (original_name in profile_dict_list[bigwig_idx] and 
+                profile_dict_list[bigwig_idx][original_name] is not None):
+                
+                profile_data = profile_dict_list[bigwig_idx][original_name]
+                
                 positions = profile_data['positions']
                 mean_signal = profile_data['mean_signal']
                 std_signal = profile_data['std_signal']
                 n_regions = profile_data['n_regions']
+                
+                st.write(f"DEBUG: Plotting {bigwig_name} for {custom_name}, n_regions={n_regions}")
                 
                 # Plot mean line - use upload order for line styles
                 line_style = '-' if bigwig_idx == 0 else '--'
@@ -840,6 +865,12 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
                                mean_signal + sem_signal,
                                color=colors[bigwig_idx], 
                                alpha=0.15)
+                
+                plotted_any = True
+        
+        if not plotted_any:
+            st.warning(f"No data plotted for {custom_name}")
+            continue
         
         # Customize individual subplot - use custom name for title
         ax.set_title(f"{custom_name}", fontsize=11, fontweight='bold')
