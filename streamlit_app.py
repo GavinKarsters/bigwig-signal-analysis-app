@@ -313,7 +313,7 @@ def extract_signals_for_profile(bigwig_file_group, bed_file, extend=2000, max_re
                 # Reshape to (number_of_bins, values_per_bin) and take mean over axis 1
                 vals_per_bin = len(vals) // n_bins
                 if vals_per_bin > 0:
-                    binned_vals = np.mean(vals[:vals_per_bin * n_bins].reshape(n_bins, -1), axis=1)
+                    binned_vals = np.mean(vals[...].reshape(n_bins, -1), axis=1)
                     replicate_profiles.append(binned_vals)
                 else: # Fallback for very small regions
                     replicate_profiles.append(np.zeros(n_bins))
