@@ -256,118 +256,63 @@ def load_signal_data_from_excel(uploaded_file):
             st.warning(f"Could not load boxplot data: {e}")
             signals_data = None
         
-        # COMPLETELY REWRITTEN: Read profile data with proper sheet name mapping
+        # COMPLETELY REWRITTEN: Read profile data by directly reading each sheet
         profile_data = None
         try:
             # Get all sheet names that start with 'Profile_'
             excel_file = pd.ExcelFile(uploaded_file)
             profile_sheets = [sheet for sheet in excel_file.sheet_names if sheet.startswith('Profile_')]
             
-            st.write(f"DEBUG: Found {len(profile_sheets)} profile sheets: {profile_sheets}")
-            
             if profile_sheets:
                 profile_data = []
                 
+                # Initialize each group with empty dict
                 for group_idx, group_name in enumerate(group_names):
                     profile_dict = {}
-                    
-                    st.write(f"DEBUG: Processing group {group_idx}: {group_name}")
-                    
-                    # Create the safe group name as used in export
-                    safe_bigwig = group_name.replace('/', '_').replace('\\', '_')[:10]
-                    
-                    for bed_name in bed_names_ordered:
-                        st.write(f"DEBUG: Looking for BED {bed_name} in group {group_name}")
-                        
-                        # Create the safe bed name as used in export
-                        safe_bed = bed_name.replace('/', '_').replace('\\', '_')[:15]
-                        
-                        # Expected sheet name pattern
-                        expected_pattern = f'Profile_{safe_bigwig}_{safe_bed}'
-                        
-                        # Find exact or partial match
-                        matching_sheet = None
-                        
-                        # Strategy 1: Look for exact match or sheet that starts with expected pattern
-                        for sheet in profile_sheets:
-                            if sheet == expected_pattern or sheet.startswith(expected_pattern):
-                                matching_sheet = sheet
-                                st.write(f"DEBUG: Found exact/prefix match: {sheet}")
-                                break
-                        
-                        # Strategy 2: Look for any sheet containing both safe names
-                        if not matching_sheet:
-                            for sheet in profile_sheets:
-                                if safe_bigwig in sheet and safe_bed in sheet:
-                                    matching_sheet = sheet
-                                    st.write(f"DEBUG: Found partial match: {sheet}")
-                                    break
-                        
-                        # Strategy 3: More flexible matching - read sheet contents to verify
-                        if not matching_sheet:
-                            for sheet in profile_sheets:
-                                try:
-                                    # Read just first few rows to check content
-                                    temp_df = pd.read_excel(uploaded_file, sheet_name=sheet, nrows=1)
-                                    if ('BigWig_Group' in temp_df.columns and 'BED_File' in temp_df.columns):
-                                        sheet_bigwig = temp_df['BigWig_Group'].iloc[0]
-                                        sheet_bed = temp_df['BED_File'].iloc[0]
-                                        if sheet_bigwig == group_name and sheet_bed == bed_name:
-                                            matching_sheet = sheet
-                                            st.write(f"DEBUG: Found content match: {sheet}")
-                                            break
-                                except Exception as e:
-                                    continue
-                        
-                        if matching_sheet:
-                            st.write(f"DEBUG: Using sheet: {matching_sheet} for group {group_name}, bed {bed_name}")
-                            try:
-                                profile_df = pd.read_excel(uploaded_file, sheet_name=matching_sheet)
-                                
-                                # Verify this is the correct data
-                                if 'BigWig_Group' in profile_df.columns and 'BED_File' in profile_df.columns:
-                                    actual_group = profile_df['BigWig_Group'].iloc[0]
-                                    actual_bed = profile_df['BED_File'].iloc[0]
-                                    st.write(f"DEBUG: Sheet contains group='{actual_group}', bed='{actual_bed}'")
-                                    
-                                    # Only use if it matches what we expect
-                                    if actual_group == group_name and actual_bed == bed_name:
-                                        # Extract individual region profiles
-                                        region_cols = [col for col in profile_df.columns if col.startswith('Region_')]
-                                        all_profiles = []
-                                        for col in region_cols:
-                                            all_profiles.append(profile_df[col].values)
-                                        
-                                        if all_profiles:
-                                            all_profiles = np.array(all_profiles)
-                                        else:
-                                            # Create dummy profiles from mean
-                                            all_profiles = np.array([profile_df['Mean_Signal'].values])
-                                        
-                                        profile_info = {
-                                            'positions': profile_df['Position'].values,
-                                            'mean_signal': profile_df['Mean_Signal'].values,
-                                            'std_signal': profile_df['Std_Signal'].values,
-                                            'all_profiles': all_profiles,
-                                            'n_regions': int(profile_df['N_Regions'].iloc[0])
-                                        }
-                                        
-                                        profile_dict[bed_name] = profile_info
-                                        st.write(f"DEBUG: Successfully loaded profile for {bed_name} with n_regions={profile_info['n_regions']}")
-                                    else:
-                                        st.warning(f"DEBUG: Sheet {matching_sheet} has wrong content: expected group={group_name}, bed={bed_name}, got group={actual_group}, bed={actual_bed}")
-                                else:
-                                    st.warning(f"DEBUG: Sheet {matching_sheet} missing required columns")
-                                
-                            except Exception as e:
-                                st.error(f"Error loading profile data from sheet {matching_sheet}: {e}")
-                        else:
-                            st.warning(f"DEBUG: No matching sheet found for group {group_name}, bed {bed_name}")
-                            st.write(f"DEBUG: Expected pattern: {expected_pattern}")
-                            st.write(f"DEBUG: Available sheets: {profile_sheets}")
-                    
                     profile_data.append(profile_dict)
-                    st.write(f"DEBUG: Group {group_idx} profile_dict keys: {list(profile_dict.keys())}")
+                
+                # Read each profile sheet and assign to correct group/bed combination
+                for sheet_name in profile_sheets:
+                    try:
+                        # Read the sheet to get the actual group and bed names
+                        sheet_df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+                        
+                        if 'BigWig_Group' in sheet_df.columns and 'BED_File' in sheet_df.columns:
+                            actual_group = sheet_df['BigWig_Group'].iloc[0]
+                            actual_bed = sheet_df['BED_File'].iloc[0]
+                            
+                            # Find which group index this belongs to
+                            try:
+                                group_idx = group_names.index(actual_group)
+                            except ValueError:
+                                continue  # Skip if group not found
+                            
+                            # Extract individual region profiles
+                            region_cols = [col for col in sheet_df.columns if col.startswith('Region_')]
+                            all_profiles = []
+                            for col in region_cols:
+                                all_profiles.append(sheet_df[col].values)
+                            
+                            if all_profiles:
+                                all_profiles = np.array(all_profiles)
+                            else:
+                                # Create dummy profiles from mean
+                                all_profiles = np.array([sheet_df['Mean_Signal'].values])
+                            
+                            profile_info = {
+                                'positions': sheet_df['Position'].values,
+                                'mean_signal': sheet_df['Mean_Signal'].values,
+                                'std_signal': sheet_df['Std_Signal'].values,
+                                'all_profiles': all_profiles,
+                                'n_regions': int(sheet_df['N_Regions'].iloc[0])
+                            }
+                            
+                            # Assign to correct group and bed
+                            profile_data[group_idx][actual_bed] = profile_info
+                            
+                    except Exception as e:
+                        st.warning(f"Error reading sheet {sheet_name}: {e}")
+                        continue
         
         except Exception as e:
             st.error(f"Error loading profile data: {e}")
@@ -821,7 +766,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
         return None
     
     n_groups = len(valid_groups)
-    st.write(f"DEBUG: Found {n_groups} valid groups to plot: {[g[0] for g in valid_groups]}")
     
     # Calculate subplot layout
     if n_groups <= 3:
@@ -852,8 +796,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     for idx, (custom_name, original_name) in enumerate(valid_groups):
         ax = axes[idx]
         
-        st.write(f"DEBUG: Plotting subplot {idx} for {custom_name} (original: {original_name})")
-        
         # Plot data for each BigWig that has this BED file
         plotted_any = False
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
@@ -866,8 +808,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
                 mean_signal = profile_data['mean_signal']
                 std_signal = profile_data['std_signal']
                 n_regions = profile_data['n_regions']
-                
-                st.write(f"DEBUG: Plotting {bigwig_name} for {custom_name}, n_regions={n_regions}")
                 
                 # Plot mean line - use upload order for line styles
                 line_style = '-' if bigwig_idx == 0 else '--'
@@ -1414,4 +1354,37 @@ def main():
                 st.info("Export extracted signal data to Excel file for future use. This allows you to skip signal extraction and generate plots instantly.")
                 
                 try:
-                    excel_buffer = export
+                    excel_buffer = export_signal_data_to_excel(
+                        signals_data, profile_data, custom_bigwig_names, custom_bed_names, 
+                        bigwig_file_names, analysis_params
+                    )
+                    
+                    # Generate filename with timestamp
+                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+                    filename = f"bigwig_signal_data_{timestamp}.xlsx"
+                    
+                    st.download_button(
+                        label="📊 Download Signal Data (Excel)",
+                        data=excel_buffer,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        help="Download extracted signal data for future analysis"
+                    )
+                    
+                    st.success("✅ Signal data export ready! You can re-upload this file later to skip signal extraction.")
+                    
+                except Exception as e:
+                    st.error(f"Error exporting signal data: {e}")
+                    st.exception(e)
+                
+                status_text.text("✅ Analysis complete!")
+                
+            except Exception as e:
+                st.error(f"An error occurred during analysis: {e}")
+                st.exception(e)
+            finally:
+                # Reset analysis state
+                st.session_state.analysis_running = False
+
+if __name__ == "__main__":
+    main()
