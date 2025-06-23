@@ -93,6 +93,8 @@ def export_plot_with_format(fig, base_filename, format_type):
     buf.seek(0)
     return buf.getvalue(), filename, mime_type
 
+
+
 def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_names_ordered, 
                                 bigwig_file_names, analysis_params):
     """Export all extracted signal data to Excel file with metadata"""
@@ -101,7 +103,7 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         
-        # Sheet 1: Metadata
+        # Sheet 1: Metadata (no changes here)
         metadata = {
             'Parameter': [
                 'Analysis Date',
@@ -132,12 +134,11 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
         metadata_df = pd.DataFrame(metadata)
         metadata_df.to_excel(writer, sheet_name='Metadata', index=False)
         
-        # Sheet 2: Boxplot Signal Data
+        # Sheet 2: Boxplot Signal Data (no changes here)
         if signals_data:
             boxplot_data = []
             
             if len(group_names) == 1:
-                # Single BigWig group
                 signals_dict = signals_data[0]
                 for bed_name in bed_names_ordered:
                     if bed_name in signals_dict:
@@ -149,7 +150,6 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
                                 'Signal_Value': signal
                             })
             else:
-                # Multiple BigWig groups
                 for bigwig_idx, bigwig_group in enumerate(group_names):
                     signals_dict = signals_data[bigwig_idx]
                     for bed_name in bed_names_ordered:
@@ -171,11 +171,11 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
             for bigwig_idx, bigwig_group in enumerate(group_names):
                 profile_dict = profile_data[bigwig_idx]
                 
-                for bed_name in bed_names_ordered:
+                # FIX: Enumerate over bed names to get a unique index
+                for bed_idx, bed_name in enumerate(bed_names_ordered):
                     if bed_name in profile_dict and profile_dict[bed_name] is not None:
                         profile_info = profile_dict[bed_name]
                         
-                        # Create base DataFrame
                         base_data = {
                             'Position': profile_info['positions'],
                             'Mean_Signal': profile_info['mean_signal'],
@@ -185,35 +185,38 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
                             'BED_File': bed_name
                         }
                         
-                        # FIXED: Create region columns efficiently using pd.concat
                         all_profiles = profile_info['all_profiles']
                         region_data = {}
-                        for i in range(min(all_profiles.shape[0], 100)):  # Limit to first 100 regions
+                        for i in range(min(all_profiles.shape[0], 100)):
                             region_data[f'Region_{i+1}'] = all_profiles[i, :]
                         
-                        # Combine all data at once
                         all_data = {**base_data, **region_data}
                         profile_df = pd.DataFrame(all_data)
                         
-                        # Create safe sheet name
-                        safe_bigwig = bigwig_group.replace('/', '_').replace('\\', '_')[:10]
-                        safe_bed = bed_name.replace('/', '_').replace('\\', '_')[:15]
-                        sheet_name = f'Profile_{safe_bigwig}_{safe_bed}'[:31]  # Excel sheet name limit
+                        # --- START OF FIX ---
+                        # Create a guaranteed unique sheet name using indices
+                        safe_bed_name = bed_name.replace('/', '_').replace('\\', '_').replace(' ', '_')[:20]
+                        # 'P' for Profile. The indices guarantee uniqueness.
+                        sheet_name = f'P_{bigwig_idx}_{bed_idx}_{safe_bed_name}'
+                        # Final truncation to ensure it's under the 31 char limit
+                        sheet_name = sheet_name[:31]
+                        # --- END OF FIX ---
                         
                         profile_df.to_excel(writer, sheet_name=sheet_name, index=False)
     
     output.seek(0)
     return output
 
+
+
 def load_signal_data_from_excel(uploaded_file):
     """Load signal data from uploaded Excel file"""
     
     try:
-        # Read metadata
+        # Read metadata (no changes needed)
         metadata_df = pd.read_excel(uploaded_file, sheet_name='Metadata')
         metadata_dict = dict(zip(metadata_df['Parameter'], metadata_df['Value']))
         
-        # Parse metadata
         bigwig_file_names = metadata_dict['BigWig Files (Upload Order)'].split(' | ')
         bed_names_ordered = metadata_dict['BED Files (Upload Order)'].split(' | ')
         group_names = metadata_dict['BigWig Groups'].split(' | ')
@@ -227,13 +230,12 @@ def load_signal_data_from_excel(uploaded_file):
             'line_bin_size': int(metadata_dict.get('Line Plot Bin Size (bp)', 20))
         }
         
-        # Read boxplot data
+        # Read boxplot data (no changes needed)
         signals_data = None
         try:
             boxplot_df = pd.read_excel(uploaded_file, sheet_name='Boxplot_Signals')
             
             if len(group_names) == 1:
-                # Single BigWig group
                 signals_dict = {}
                 for bed_name in bed_names_ordered:
                     bed_data = boxplot_df[boxplot_df['BED_File'] == bed_name]
@@ -241,7 +243,6 @@ def load_signal_data_from_excel(uploaded_file):
                         signals_dict[bed_name] = bed_data['Signal_Value'].tolist()
                 signals_data = [signals_dict]
             else:
-                # Multiple BigWig groups
                 signals_data = []
                 for group_name in group_names:
                     signals_dict = {}
@@ -256,49 +257,35 @@ def load_signal_data_from_excel(uploaded_file):
             st.warning(f"Could not load boxplot data: {e}")
             signals_data = None
         
-        # Read profile data by directly reading each sheet
+        # Read profile data - FIXED VERSION
         profile_data = None
         try:
-            # Get all sheet names that start with 'Profile_'
             excel_file = pd.ExcelFile(uploaded_file)
-            profile_sheets = [sheet for sheet in excel_file.sheet_names if sheet.startswith('Profile_')]
+            
+            # --- START OF FIX ---
+            # Look for the new, unique sheet name prefix 'P_' instead of 'Profile_'
+            profile_sheets = [sheet for sheet in excel_file.sheet_names if sheet.startswith('P_')]
+            # --- END OF FIX ---
             
             if profile_sheets:
-                profile_data = []
+                profile_data = [{} for _ in group_names] # Initialize list of dicts
                 
-                # Initialize each group with empty dict
-                for group_idx, group_name in enumerate(group_names):
-                    profile_dict = {}
-                    profile_data.append(profile_dict)
-                
-                # Read each profile sheet and assign to correct group/bed combination
                 for sheet_name in profile_sheets:
                     try:
-                        # Read the sheet to get the actual group and bed names
                         sheet_df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
                         
                         if 'BigWig_Group' in sheet_df.columns and 'BED_File' in sheet_df.columns:
                             actual_group = sheet_df['BigWig_Group'].iloc[0]
                             actual_bed = sheet_df['BED_File'].iloc[0]
                             
-                            # Find which group index this belongs to
                             try:
                                 group_idx = group_names.index(actual_group)
                             except ValueError:
-                                continue  # Skip if group not found
+                                continue
                             
-                            # Extract individual region profiles
                             region_cols = [col for col in sheet_df.columns if col.startswith('Region_')]
-                            all_profiles = []
-                            for col in region_cols:
-                                all_profiles.append(sheet_df[col].values)
-                            
-                            if all_profiles:
-                                all_profiles = np.array(all_profiles)
-                            else:
-                                # Create dummy profiles from mean
-                                all_profiles = np.array([sheet_df['Mean_Signal'].values])
-                            
+                            all_profiles = np.array([sheet_df[col].values for col in region_cols]) if region_cols else np.array([sheet_df['Mean_Signal'].values])
+
                             profile_info = {
                                 'positions': sheet_df['Position'].values,
                                 'mean_signal': sheet_df['Mean_Signal'].values,
@@ -307,7 +294,6 @@ def load_signal_data_from_excel(uploaded_file):
                                 'n_regions': int(sheet_df['N_Regions'].iloc[0])
                             }
                             
-                            # Assign to correct group and bed
                             profile_data[group_idx][actual_bed] = profile_info
                             
                     except Exception as e:
@@ -331,6 +317,9 @@ def load_signal_data_from_excel(uploaded_file):
     except Exception as e:
         st.error(f"Error loading Excel file: {e}")
         return None
+
+
+
 
 def setup_replicate_groups(bigwig_files):
     """Setup UI for defining replicate groups"""
