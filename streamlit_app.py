@@ -464,6 +464,12 @@ def main():
     st.title("📊 BigWig Signal Analysis Tool")
     st.markdown("Upload BigWig/BED files or a pre-extracted Excel file to generate plots.")
     
+    # Initialize session state for analysis results
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'analysis_running' not in st.session_state:
+        st.session_state.analysis_running = False
+    
     pre_extracted_data = None
     st.header("🔄 Import Pre-Extracted Signal Data (Optional)")
     uploaded_excel = st.file_uploader("Choose an exported signal data file (.xlsx):", type=['xlsx'], key="excel_uploader")
@@ -551,7 +557,6 @@ def main():
         return
 
     st.markdown("---"); st.header("🔬 New Analysis")
-    if 'analysis_running' not in st.session_state: st.session_state.analysis_running = False
 
     with st.sidebar:
         st.header("⚙️ Analysis Parameters")
@@ -574,6 +579,17 @@ def main():
     with col2:
         st.subheader("📄 Upload BED Files")
         bed_files = st.file_uploader("Choose .bed files", type=['bed'], accept_multiple_files=True, disabled=st.session_state.analysis_running)
+
+    # Clear previous analysis results when new files are uploaded
+    if bigwig_files or bed_files:
+        if st.session_state.analysis_results:
+            # Check if the uploaded files are different from the previous analysis
+            current_bw_names = [f.name for f in bigwig_files] if bigwig_files else []
+            current_bed_names = [f.name for f in bed_files] if bed_files else []
+            
+            if (current_bw_names != st.session_state.analysis_results.get('bigwig_file_names', []) or 
+                current_bed_names != st.session_state.analysis_results.get('bed_file_names', [])):
+                st.session_state.analysis_results = None
 
     if st.button("🚀 Run Analysis", type="primary", use_container_width=True, disabled=not bigwig_files or not bed_files or st.session_state.analysis_running):
         st.session_state.analysis_running = True
@@ -611,37 +627,78 @@ def main():
                 
                 status_text.text("✅ Analysis complete! Generating plots..."); progress_bar.progress(1.0)
                 
-                custom_bigwig_names, custom_bed_names = setup_custom_names(group_names, bed_names_ordered, "new_analysis")
-                
-                if plot_type in ["Boxplot", "All"] and signals_data:
-                    st.subheader("📊 Boxplot Results")
-                    fig = create_single_boxplot(signals_data[0] if len(custom_bigwig_names)==1 else signals_data, custom_bigwig_names, custom_bed_names, y_max)
-                    st.pyplot(fig); f_data, f_name, f_mime = export_plot_with_format(fig, "boxplot", export_format); st.download_button(f"📥 Download Boxplot", f_data, f_name, f_mime)
-
-                if plot_type in ["Line plot", "All"] and profile_data:
-                    st.subheader("📈 Line Plot Results")
-                    fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names)
-                    st.pyplot(fig); f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format); st.download_button(f"📥 Download Line Plot", f_data, f_name, f_mime)
-                
-                if plot_type in ["Heatmap", "All"] and profile_data:
-                    st.subheader("🔥 Consolidated Heatmap Comparison")
-                    fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, None, cmap_choice, sort_regions, vmin, vmax)
-                    if fig:
-                        st.pyplot(fig)
-                        f_data, f_name, f_mime = export_plot_with_format(fig, "consolidated_heatmap", export_format)
-                        st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key=f"dl_heatmap_consolidated_new")
-                
-                st.header("💾 Export Signal Data")
-                analysis_params = {'plot_type': plot_type, 'y_max': y_max, 'extend_bp': extend_bp, 'max_regions': max_regions, 'line_extend': 2000, 'line_bin_size': 20, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax}
-                excel_buffer = export_signal_data_to_excel(signals_data, profile_data, custom_bigwig_names, custom_bed_names, [f.name for f in bigwig_files], analysis_params)
-                st.download_button("📊 Download Signal Data (Excel)", excel_buffer, f"signal_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                # Store results in session state
+                st.session_state.analysis_results = {
+                    'signals_data': signals_data,
+                    'profile_data': profile_data,
+                    'group_names': group_names,
+                    'bed_names_ordered': bed_names_ordered,
+                    'bigwig_file_names': [f.name for f in bigwig_files],
+                    'bed_file_names': [f.name for f in bed_files],
+                    'analysis_params': {
+                        'plot_type': plot_type, 'y_max': y_max, 'extend_bp': extend_bp, 'max_regions': max_regions,
+                        'line_extend': 2000, 'line_bin_size': 20, 'cmap': cmap_choice, 'sort_regions': sort_regions,
+                        'vmin': vmin, 'vmax': vmax
+                    }
+                }
 
             except Exception as e:
                 st.error(f"An error occurred during analysis: {e}")
                 st.exception(e)
             finally:
                 st.session_state.analysis_running = False
-                #st.rerun()
+
+    # Display results if they exist in session state
+    if st.session_state.analysis_results:
+        analysis_data = st.session_state.analysis_results
+        
+        custom_bigwig_names, custom_bed_names = setup_custom_names(
+            analysis_data['group_names'], 
+            analysis_data['bed_names_ordered'], 
+            mode="new_analysis"
+        )
+        
+        if plot_type in ["Boxplot", "All"] and analysis_data['signals_data']:
+            st.subheader("📊 Boxplot Results")
+            fig = create_single_boxplot(
+                analysis_data['signals_data'][0] if len(custom_bigwig_names)==1 else analysis_data['signals_data'], 
+                custom_bigwig_names, custom_bed_names, y_max
+            )
+            if fig:
+                st.pyplot(fig)
+                f_data, f_name, f_mime = export_plot_with_format(fig, "boxplot", export_format)
+                st.download_button(f"📥 Download Boxplot ({export_format})", f_data, f_name, f_mime, key="dl_boxplot_new")
+
+        if plot_type in ["Line plot", "All"] and analysis_data['profile_data']:
+            st.subheader("📈 Line Plot Results")
+            fig = create_subplot_line_plot(analysis_data['profile_data'], custom_bigwig_names, custom_bed_names)
+            if fig:
+                st.pyplot(fig)
+                f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format)
+                st.download_button(f"📥 Download Line Plot ({export_format})", f_data, f_name, f_mime, key="dl_lineplot_new")
+        
+        if plot_type in ["Heatmap", "All"] and analysis_data['profile_data']:
+            st.subheader("🔥 Consolidated Heatmap Comparison")
+            fig = create_comparison_heatmaps(
+                analysis_data['profile_data'], custom_bigwig_names, custom_bed_names, None, 
+                cmap_choice, sort_regions, vmin, vmax
+            )
+            if fig:
+                st.pyplot(fig)
+                f_data, f_name, f_mime = export_plot_with_format(fig, "consolidated_heatmap", export_format)
+                st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key="dl_heatmap_consolidated_new")
+        
+        st.header("💾 Export Signal Data")
+        excel_buffer = export_signal_data_to_excel(
+            analysis_data['signals_data'], analysis_data['profile_data'], custom_bigwig_names, 
+            custom_bed_names, analysis_data['bigwig_file_names'], analysis_data['analysis_params']
+        )
+        st.download_button(
+            "📊 Download Signal Data (Excel)", excel_buffer, 
+            f"signal_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx", 
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_excel_new"
+        )
 
 if __name__ == "__main__":
     main()
