@@ -448,29 +448,37 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     ncols = len(bigwig_names)
     
     # Smart figure sizing for heatmaps
-    if ncols == 1 and nrows == 1:
-        # Single heatmap
-        fig_width, fig_height = 8, 6
-    elif ncols == 1:
-        # Single column, multiple rows
-        fig_width = 8
-        fig_height = min(3 * nrows, 15)  # Max height of 15
+    if ncols == 1:
+        # Single BigWig - make it narrower and taller
+        if nrows == 1:
+            # Single heatmap
+            fig_width, fig_height = 8, 6
+        else:
+            # Multiple BED files, single BigWig - stack vertically
+            fig_width = 8
+            fig_height = min(4 * nrows, 16)  # Max height of 16
     elif nrows == 1:
-        # Single row, multiple columns
-        fig_width = min(5 * ncols, 20)  # Max width of 20
+        # Single BED file, multiple BigWigs - arrange horizontally but limit width
+        fig_width = min(6 * ncols, 18)  # More reasonable width per column
         fig_height = 6
     else:
         # Multiple rows and columns
-        fig_width = min(4 * ncols + 1, 20)
+        fig_width = min(5 * ncols + 1, 20)  # Slightly wider per column
         fig_height = min(3.5 * nrows, 18)
     
     fig = plt.figure(figsize=(fig_width, fig_height))
     
-    # Adjust grid spacing based on size
+    # Adjust grid spacing and ratios based on layout
     if ncols == 1:
-        gs = GridSpec(nrows, ncols + 1, width_ratios=[4, 0.2], 
+        # Single column - colorbar takes less relative space
+        gs = GridSpec(nrows, 2, width_ratios=[6, 0.3], 
                      wspace=0.1, hspace=0.3)
+    elif nrows == 1:
+        # Single row - adjust spacing between columns
+        gs = GridSpec(1, ncols + 1, width_ratios=[5] * ncols + [0.3], 
+                     wspace=0.2, hspace=0.3)
     else:
+        # Multiple rows and columns
         gs = GridSpec(nrows, ncols + 1, width_ratios=[4] * ncols + [0.2], 
                      wspace=0.15, hspace=0.4)
 
@@ -486,13 +494,13 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         for col_idx, bw_name in enumerate(bigwig_names):
             ax = fig.add_subplot(gs[row_idx, col_idx])
 
-            # Adjust title font size based on number of columns
-            title_fontsize = 12 if ncols <= 2 else 10
+            # Adjust title font size based on layout
+            title_fontsize = 14 if ncols == 1 else (12 if ncols <= 2 else 10)
             if row_idx == 0:
                 ax.set_title(bw_name, fontweight='bold', fontsize=title_fontsize)
 
-            # Adjust ylabel font size based on number of rows
-            ylabel_fontsize = 12 if nrows <= 3 else 10
+            # Adjust ylabel font size and positioning
+            ylabel_fontsize = 14 if ncols == 1 else (12 if nrows <= 3 else 10)
             if col_idx == 0:
                 ax.set_ylabel(custom_bed_name, fontweight='bold', fontsize=ylabel_fontsize)
             
@@ -508,11 +516,11 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                               cmap=cmap, vmin=vmin, vmax=vmax)
                 
                 # Adjust annotation font size
-                annotation_fontsize = 9 if ncols <= 2 else 8
+                annotation_fontsize = 10 if ncols == 1 else (9 if ncols <= 2 else 8)
                 ax.text(0.02, 0.98, f"n={p_data['n_regions']}", 
                        transform=ax.transAxes, ha='left', va='top', 
                        fontsize=annotation_fontsize, 
-                       bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.5))
+                       bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
                 ax.set_yticks([])
 
             if row_idx == nrows - 1:
@@ -522,15 +530,26 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 ax.set_xticks(tick_pos)
                 
                 # Adjust tick label font size
-                tick_fontsize = 10 if ncols <= 2 else 9
+                tick_fontsize = 11 if ncols == 1 else (10 if ncols <= 2 else 9)
                 ax.set_xticklabels(tick_labels, fontsize=tick_fontsize)
-                ax.set_xlabel("Distance from Center", fontsize=11)
+                xlabel_fontsize = 12 if ncols == 1 else 11
+                ax.set_xlabel("Distance from Center", fontsize=xlabel_fontsize)
             else:
                 ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
 
+    # Add colorbar with appropriate positioning
     if im:
-        cbar_ax = fig.add_subplot(gs[:, -1])
-        fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
+        if ncols == 1:
+            # For single column, colorbar goes in the second column
+            cbar_ax = fig.add_subplot(gs[:, 1])
+        else:
+            # For multiple columns, colorbar goes in the last column
+            cbar_ax = fig.add_subplot(gs[:, -1])
+        
+        cbar = fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
+        # Adjust colorbar label font size
+        cbar_fontsize = 11 if ncols == 1 else 10
+        cbar.set_label("Signal Intensity", fontsize=cbar_fontsize)
 
     return fig
 
