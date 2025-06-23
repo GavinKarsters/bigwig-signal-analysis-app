@@ -545,12 +545,11 @@ def main():
         st.header("📊 Analysis Results")
 
         if st.button("🗑️ Clear Results and Start New Analysis"):
-            # When clearing, we must clear all related state variables
-            st.session_state.analysis_results = None
-            st.session_state.excel_uploader = None # This is allowed here, as it happens on the *next* run
-            if 'replicate_groups' in st.session_state:
-                del st.session_state.replicate_groups
-            st.rerun()
+          st.session_state.analysis_results = None
+          # We do NOT touch excel_uploader's state directly.
+          if 'replicate_groups' in st.session_state:
+              del st.session_state.replicate_groups
+          st.rerun()
             
         # The rest of the display logic is the same and now works perfectly
         results = st.session_state.analysis_results
