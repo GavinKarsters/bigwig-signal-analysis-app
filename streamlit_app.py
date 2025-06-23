@@ -12,7 +12,7 @@ import io
 from pathlib import Path
 import time
 import json
-from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.gridspec import GridSpec
 
 # Set page config
 st.set_page_config(
@@ -263,27 +263,27 @@ def extract_signals_fast(bigwig_file_group, bed_file, extend=500, max_regions=50
     try:
         bed_df = pd.read_csv(bed_file, sep='\t', header=None, usecols=[0, 1, 2], names=['chr', 'start', 'end'], dtype={'chr': str, 'start': int, 'end': int})
         if len(bed_df) > max_regions: bed_df = bed_df.sample(n=max_regions, random_state=42)
-    except Exception as e: return []
+    except Exception:
+        return []
     try:
         bw_handles = [pyBigWig.open(p) for p in bigwig_file_group]
-    except Exception as e: return []
+    except Exception:
+        return []
     
     signals = []
     for _, row in bed_df.iterrows():
         center = (row['start'] + row['end']) // 2
-        
-        # Average within the replicate group
         rep_signals = [np.mean([v for v in bw.values(row['chr'], max(0, center-extend), center+extend) if v is not None and not np.isnan(v)] or [0]) for bw in bw_handles]
         signals.append(np.mean(rep_signals) if rep_signals else 0)
 
     for bw in bw_handles: bw.close()
     return signals
 
-# --- FIXED AND REFACTORED SIGNAL EXTRACTION FUNCTION ---
+# --- PERMANENTLY FIXED SIGNAL EXTRACTION FUNCTION ---
 def extract_signals_for_profile(bigwig_file_group, bed_file, extend=2000, max_regions=5000, bin_size=20):
     """
     Extracts and bins signal for a SINGLE replicate group.
-    The binning logic has been corrected.
+    This version uses pyBigWig.stats for robust and correct binning.
     """
     try:
         bed_df = pd.read_csv(bed_file, sep='\t', header=None, usecols=[0, 1, 2], names=['chr', 'start', 'end'], dtype={'chr': str, 'start': int, 'end': int})
@@ -305,19 +305,13 @@ def extract_signals_for_profile(bigwig_file_group, bed_file, extend=2000, max_re
         
         replicate_profiles = []
         for bw in bw_handles:
-            vals = bw.values(row['chr'], start, end, numpy=True)
-            if vals is not None and len(vals) > 0:
-                vals = np.nan_to_num(vals)
-                
-                # --- CORRECTED BINNING LOGIC ---
-                # Reshape to (number_of_bins, values_per_bin) and take mean over axis 1
-                vals_per_bin = len(vals) // n_bins
-                if vals_per_bin > 0:
-                    binned_vals = np.mean(vals[...].reshape(n_bins, -1), axis=1)
-                    replicate_profiles.append(binned_vals)
-                else: # Fallback for very small regions
-                    replicate_profiles.append(np.zeros(n_bins))
-            else:
+            try:
+                # Use the more robust bw.stats for binning
+                binned_vals = bw.stats(row['chr'], start, end, type="mean", nBins=n_bins, exact=False)
+                # pyBigWig returns None for empty regions, replace with zeros
+                replicate_profiles.append(np.nan_to_num(np.array(binned_vals, dtype=float)))
+            except RuntimeError:
+                # This can happen if a chromosome is not in the bigwig file
                 replicate_profiles.append(np.zeros(n_bins))
         
         # Average the profiles from the replicates for this one genomic region
@@ -381,8 +375,9 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
             if original_name in profile_dict_list[bw_idx] and profile_dict_list[bw_idx][original_name]:
                 p = profile_dict_list[bw_idx][original_name]
                 ax.plot(p['positions'], p['mean_signal'], color=colors[bw_idx % len(colors)], label=f"{bw_name} (n={p['n_regions']})")
-                sem = p['std_signal'] / np.sqrt(p['n_regions'])
-                ax.fill_between(p['positions'], p['mean_signal'] - sem, p['mean_signal'] + sem, color=colors[bw_idx % len(colors)], alpha=0.15)
+                if p['n_regions'] > 1:
+                    sem = p['std_signal'] / np.sqrt(p['n_regions'])
+                    ax.fill_between(p['positions'], p['mean_signal'] - sem, p['mean_signal'] + sem, color=colors[bw_idx % len(colors)], alpha=0.15)
         ax.set_title(custom_name, fontsize=11, fontweight='bold')
         ax.axvline(x=0, color='black', linestyle=':', alpha=0.5)
         if len(bigwig_names) > 1: ax.legend(fontsize=8)
@@ -395,10 +390,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
 
 def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_bed_names=None,
                                cmap='viridis', sort_regions=True, vmin=0.0, vmax=10.0):
-    """
-    Creates ONE consolidated figure with a grid of comparison heatmaps.
-    Rows are BED files, Columns are BigWig files.
-    """
     if not profile_data or not profile_data[0]:
         return None
 
@@ -413,7 +404,12 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
 
     nrows = len(valid_beds)
     ncols = len(bigwig_names)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3.5 * nrows), sharex=True, squeeze=False)
+    
+    fig_width = 4 * ncols + 1
+    fig_height = 3.5 * nrows
+    fig = plt.figure(figsize=(fig_width, fig_height))
+    
+    gs = GridSpec(nrows, ncols + 1, width_ratios=[4] * ncols + [0.2], wspace=0.15, hspace=0.4)
 
     im = None 
 
@@ -426,7 +422,7 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
             sorted_indices = np.arange(ref_matrix.shape[0])
 
         for col_idx, bw_name in enumerate(bigwig_names):
-            ax = axes[row_idx, col_idx]
+            ax = fig.add_subplot(gs[row_idx, col_idx])
 
             if row_idx == 0:
                 ax.set_title(bw_name, fontweight='bold', fontsize=12)
@@ -437,6 +433,7 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
             if not (col_idx < len(profile_data) and original_bed_name in profile_data[col_idx] and profile_data[col_idx][original_bed_name]):
                 ax.text(0.5, 0.5, "No Data", ha='center', va='center')
                 ax.set_yticks([])
+                ax.set_xticks([])
             else:
                 p_data = profile_data[col_idx][original_bed_name]
                 matrix = p_data['all_profiles'][sorted_indices, :]
@@ -445,7 +442,6 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 
                 ax.text(0.02, 0.98, f"n={p_data['n_regions']}", transform=ax.transAxes, 
                         ha='left', va='top', fontsize=9, bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.5))
-                
                 ax.set_yticks([])
 
             if row_idx == nrows - 1:
@@ -456,11 +452,10 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 ax.set_xticklabels(tick_labels, fontsize=10)
                 ax.set_xlabel("Distance from Center", fontsize=11)
             else:
-                ax.set_xticklabels([])
+                ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
 
     if im:
-        fig.subplots_adjust(right=0.9)
-        cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+        cbar_ax = fig.add_subplot(gs[:, -1])
         fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
 
     return fig
@@ -595,12 +590,15 @@ def main():
                 progress_bar = st.progress(0); status_text = st.empty()
                 signals_data, profile_data = [], []
                 
+                total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
+                current_task = 0
+                
                 for group_idx, group_paths in enumerate(grouped_bigwig_paths):
                     signals_dict, profile_dict = {}, {}
-                    for bed_idx, (bed_name, bed_path) in enumerate(bed_paths.items()):
-                        current_task = group_idx * len(bed_paths) + bed_idx + 1
-                        progress = (current_task) / (len(grouped_bigwig_paths) * len(bed_paths))
-                        status_text.text(f"Processing: {group_names[group_idx]} on {bed_name} ({current_task}/{len(grouped_bigwig_paths) * len(bed_paths)})")
+                    for bed_name, bed_path in bed_paths.items():
+                        current_task += 1
+                        progress = current_task / total_tasks
+                        status_text.text(f"Processing: {group_names[group_idx]} on {bed_name} ({current_task}/{total_tasks})")
                         progress_bar.progress(progress)
 
                         if plot_type in ["Boxplot", "All"] and extend_bp:
@@ -647,4 +645,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
