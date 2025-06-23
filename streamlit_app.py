@@ -641,7 +641,7 @@ def main():
                 st.exception(e)
             finally:
                 st.session_state.analysis_running = False
-                st.rerun()
+                #st.rerun()
 
 if __name__ == "__main__":
     main()
