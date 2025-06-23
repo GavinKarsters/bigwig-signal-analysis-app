@@ -22,8 +22,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- All your helper functions are correct and remain unchanged ---
-# ... (save_uploaded_file, setup_custom_names, export functions, etc.)
+# --- All your helper functions from the original script are unchanged ---
 def save_uploaded_file(uploaded_file, temp_dir):
     """Save uploaded file to temporary directory and return path"""
     file_path = os.path.join(temp_dir, uploaded_file.name)
@@ -34,7 +33,7 @@ def save_uploaded_file(uploaded_file, temp_dir):
 def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
     """Setup UI for customizing BigWig and BED file names"""
     
-    with st.expander("🏷️ Customize Names (Optional)", expanded=True): # Expanded by default for results
+    with st.expander("🏷️ Customize Names (Optional)", expanded=False):
         st.info("Customize display names for your files. These names will appear in plots and legends.")
         
         col1, col2 = st.columns(2)
@@ -459,109 +458,170 @@ def main():
     st.title("📊 BigWig Signal Analysis Tool")
     st.markdown("Upload BigWig/BED files or a pre-extracted Excel file to generate plots.")
 
-    # --- INITIALIZE SESSION STATE ---
+    ### CHANGE: Initialize all necessary state variables at the top.
     if 'analysis_running' not in st.session_state:
         st.session_state.analysis_running = False
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = None
 
-    # --- DEFINE THE CALLBACK FUNCTION ---
-    def process_excel_upload():
-        """
-        This function is called ONLY when a new file is uploaded.
-        It processes the file and stores the results in session_state.
-        """
-        uploaded_file = st.session_state.get("excel_uploader")
-        if uploaded_file:
-            with st.spinner("Loading pre-extracted data..."):
-                pre_extracted_data = load_signal_data_from_excel(uploaded_file)
-            if pre_extracted_data:
-                st.session_state.analysis_results = pre_extracted_data
-                # We don't need to rerun or clear the uploader here.
-                # The script will rerun automatically after the callback finishes.
+    # This variable will hold the data for the current script run, whether from Excel or a new analysis.
+    # It will then be used to populate the persistent st.session_state.analysis_results
+    current_run_data = None
 
-    # --- RENDER WIDGETS ---
+    # --- Part 1: Data Loading ---
+    # This part focuses ONLY on getting data into `current_run_data`. It does not plot.
+
+    # --- Section 1a: Load from Excel ---
     st.header("🔄 Import Pre-Extracted Signal Data (Optional)")
-    # Attach the callback function to the file uploader
-    st.file_uploader(
-        "Choose an exported signal data file (.xlsx):",
-        type=['xlsx'],
-        key="excel_uploader",
-        on_change=process_excel_upload
-    )
+    uploaded_excel = st.file_uploader("Choose an exported signal data file (.xlsx):", type=['xlsx'], key="excel_uploader")
+    
+    if uploaded_excel:
+        with st.spinner("Loading pre-extracted data..."):
+            current_run_data = load_signal_data_from_excel(uploaded_excel)
+        if current_run_data:
+            st.success("✅ Successfully loaded pre-extracted data!")
+            # Store the data persistently and rerun to enter the display section
+            st.session_state.analysis_results = current_run_data
+            st.rerun()
 
-    # --- SIDEBAR SETUP (remains the same) ---
+    # --- Section 1b: Load from New Analysis ---
+    st.markdown("---"); st.header("🔬 New Analysis")
+    
+    # We put the sidebar here so its values are available for the new analysis run.
     with st.sidebar:
         st.header("🔧 Plot Settings")
-        
         plot_type_options = ["Boxplot", "Line plot", "Heatmap", "All"]
-        default_index = 3 
+        # Use existing results to set defaults if they exist
+        params_source = st.session_state.analysis_results['analysis_params'] if st.session_state.analysis_results else {}
         
-        params_source = {}
-        if st.session_state.analysis_results and 'analysis_params' in st.session_state.analysis_results:
-            params_source = st.session_state.analysis_results['analysis_params']
-            
         saved_plot_type = params_source.get('plot_type', 'All')
-        if saved_plot_type == "Both": saved_plot_type = "All"
-        if saved_plot_type in plot_type_options:
-            default_index = plot_type_options.index(saved_plot_type)
-
+        default_index = plot_type_options.index(saved_plot_type) if saved_plot_type in plot_type_options else 3
         plot_type = st.selectbox("Select plot type:", plot_type_options, index=default_index)
 
-        y_max = 25.0  # Default value
-        if plot_type in ["Boxplot", "All"]:
-            st.subheader("Boxplot Settings")
-            default_y_max = params_source.get('y_max', 25.0)
-            y_max = st.number_input("Y-axis maximum:", 0.1, value=float(default_y_max))
+        # Boxplot settings
+        default_y_max = params_source.get('y_max', 25.0)
+        y_max = st.number_input("Y-axis maximum:", 0.1, value=float(default_y_max))
+        
+        # Heatmap settings
+        default_cmap = params_source.get('cmap', 'viridis')
+        default_sort = params_source.get('sort_regions', True)
+        default_vmin = params_source.get('vmin', 0.0)
+        default_vmax = params_source.get('vmax', 10.0)
+        cmap_options = ['viridis', 'coolwarm', 'Reds', 'Blues', 'YlGnBu', 'magma']
+        cmap_index = cmap_options.index(default_cmap) if default_cmap in cmap_options else 0
+        cmap_choice = st.selectbox("Colormap:", cmap_options, index=cmap_index)
+        sort_regions = st.checkbox("Sort regions by mean signal (using 1st sample as reference)", value=bool(default_sort))
+        vmin = st.number_input("Color scale min:", value=float(default_vmin), format="%.2f")
+        vmax = st.number_input("Color scale max:", value=float(default_vmax), format="%.2f")
 
-        cmap_choice, sort_regions, vmin, vmax = 'viridis', True, 0.0, 10.0 # Defaults
-        if plot_type in ["Heatmap", "All"]:
-            st.subheader("Heatmap Settings")
-            default_cmap = params_source.get('cmap', 'viridis')
-            default_sort = params_source.get('sort_regions', True)
-            default_vmin = params_source.get('vmin', 0.0)
-            default_vmax = params_source.get('vmax', 10.0)
-            
-            cmap_options = ['viridis', 'coolwarm', 'Reds', 'Blues', 'YlGnBu', 'magma']
-            cmap_index = cmap_options.index(default_cmap) if default_cmap in cmap_options else 0
-            cmap_choice = st.selectbox("Colormap:", cmap_options, index=cmap_index)
-            sort_regions = st.checkbox("Sort regions by mean signal (using 1st sample as reference)", value=bool(default_sort))
-            vmin = st.number_input("Color scale min:", value=float(default_vmin), format="%.2f")
-            vmax = st.number_input("Color scale max:", value=float(default_vmax), format="%.2f")
-
+        # Export settings
         st.subheader("Export Settings")
         export_format = st.selectbox("Export format:", ["PNG", "PDF"])
-
+        
+        # Analysis parameters for new run
         st.header("⚙️ Analysis Parameters")
-        extend_bp = None
-        if plot_type in ["Boxplot", "All"]:
-             extend_bp = st.number_input("Boxplot signal window (±bp):", 50, 5000, 500, 50, disabled=st.session_state.analysis_running)
+        extend_bp = st.number_input("Boxplot signal window (±bp):", 50, 5000, 500, 50, disabled=st.session_state.analysis_running)
         max_regions = st.number_input("Max regions per BED:", 100, 10000, 5000, 100, disabled=st.session_state.analysis_running)
-    
 
-    # --- DISPLAY RESULTS BLOCK (now handles both loaded and new analysis) ---
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("📁 Upload BigWig Files")
+        bigwig_files = st.file_uploader("Choose .bw files", type=['bw', 'bigwig'], accept_multiple_files=True, disabled=st.session_state.analysis_running)
+    with col2:
+        st.subheader("📄 Upload BED Files")
+        bed_files = st.file_uploader("Choose .bed files", type=['bed'], accept_multiple_files=True, disabled=st.session_state.analysis_running)
+
+    replicate_groups = None
+    if bigwig_files and len(bigwig_files) > 1:
+        if st.checkbox("🔗 Enable replicate grouping", False, disabled=st.session_state.analysis_running):
+            replicate_groups = setup_replicate_groups(bigwig_files)
+        else:
+            replicate_groups = [[i] for i in range(len(bigwig_files))]
+    elif bigwig_files:
+        replicate_groups = [[0]]
+
+    if st.button("🚀 Run Analysis", type="primary", use_container_width=True, disabled=not bigwig_files or not bed_files or st.session_state.analysis_running or st.session_state.analysis_results is not None):
+        st.session_state.analysis_running = True
+        with st.spinner("Analysis in progress..."):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                try:
+                    bigwig_paths = [save_uploaded_file(f, temp_dir) for f in bigwig_files]
+                    bed_paths = {Path(f.name).stem: save_uploaded_file(f, temp_dir) for f in bed_files}
+                    bed_names_ordered = [Path(f.name).stem for f in bed_files]
+                    
+                    grouped_bigwig_paths = [[bigwig_paths[i] for i in group] for group in replicate_groups]
+                    group_names = [Path(bigwig_files[g[0]].name).stem if len(g) == 1 else f"{Path(bigwig_files[g[0]].name).stem}_group" for g in replicate_groups]
+                    
+                    progress_bar = st.progress(0); status_text = st.empty()
+                    signals_data, profile_data = [], []
+                    
+                    total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
+                    current_task = 0
+                    
+                    for group_idx, group_paths in enumerate(grouped_bigwig_paths):
+                        signals_dict, profile_dict = {}, {}
+                        for bed_name, bed_path in bed_paths.items():
+                            current_task += 1
+                            progress = current_task / total_tasks
+                            status_text.text(f"Processing: {group_names[group_idx]} on {bed_name} ({current_task}/{total_tasks})")
+                            progress_bar.progress(progress)
+
+                            if plot_type in ["Boxplot", "All"]:
+                                signals_dict[bed_name] = extract_signals_fast(group_paths, bed_path, extend_bp, max_regions)
+                            if plot_type in ["Line plot", "Heatmap", "All"]:
+                                profile_dict[bed_name] = extract_signals_for_profile(group_paths, bed_path, 2000, max_regions, 20)
+                        
+                        if signals_dict: signals_data.append(signals_dict)
+                        if profile_dict: profile_data.append(profile_dict)
+                    
+                    status_text.text("✅ Analysis complete!"); progress_bar.progress(1.0)
+                    
+                    analysis_params = {'plot_type': plot_type, 'y_max': y_max, 'extend_bp': extend_bp, 'max_regions': max_regions, 'line_extend': 2000, 'line_bin_size': 20, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax}
+                    # Put the results into a temporary dictionary
+                    current_run_data = {
+                        "signals_data": signals_data, "profile_data": profile_data, "group_names": group_names,
+                        "bed_names_ordered": bed_names_ordered, "bigwig_file_names": [f.name for f in bigwig_files],
+                        "analysis_params": analysis_params, "mode": "new_analysis"
+                    }
+                    # Store the final results persistently
+                    st.session_state.analysis_results = current_run_data
+
+                except Exception as e:
+                    st.error(f"An error occurred during analysis: {e}")
+                    st.exception(e)
+                finally:
+                    st.session_state.analysis_running = False
+        st.rerun() # Rerun to enter the display section
+
+
+    ### CHANGE: Part 2: Data Displaying ---
+    # This section runs ONLY if there are results in the session state.
+    # It is responsible for all plotting and downloading.
     if st.session_state.analysis_results:
         st.markdown("---")
         st.header("📊 Analysis Results")
 
+        # Add the clear button here
         if st.button("🗑️ Clear Results and Start New Analysis"):
-          st.session_state.analysis_results = None
-          # We do NOT touch excel_uploader's state directly.
-          if 'replicate_groups' in st.session_state:
-              del st.session_state.replicate_groups
-          st.rerun()
-            
-        # The rest of the display logic is the same and now works perfectly
-        results = st.session_state.analysis_results
-        mode = "imported" if 'metadata' in results else "new_analysis"
-        original_bed_names = results.get('bed_names_ordered')
+            st.session_state.analysis_results = None
+            if 'replicate_groups' in st.session_state:
+                del st.session_state.replicate_groups
+            st.rerun()
 
-        custom_bigwig_names, custom_bed_names = setup_custom_names(
-            results['group_names'], results['bed_names_ordered'], mode=mode
-        )
+        results = st.session_state.analysis_results
+        
+        # Determine the mode from the stored results
+        mode = "imported" if 'metadata' in results else "new_analysis"
+
+        # The plotting logic is now self-contained here.
+        custom_bigwig_names, custom_bed_names = setup_custom_names(results['group_names'], results['bed_names_ordered'], mode=mode)
         
         signals_data = results.get('signals_data')
         profile_data = results.get('profile_data')
+        original_bed_names = results.get('bed_names_ordered')
+
+        # Use the y_max from the sidebar for plotting
+        display_y_max = st.session_state.analysis_results['analysis_params'].get('y_max', 25.0)
 
         if plot_type in ["Boxplot", "All"] and signals_data:
             st.subheader("📊 Boxplot Results")
@@ -570,8 +630,7 @@ def main():
                 st.pyplot(fig)
                 f_data, f_name, f_mime = export_plot_with_format(fig, "boxplot", export_format)
                 st.download_button(f"📥 Download Boxplot ({export_format})", f_data, f_name, f_mime, key="dl_boxplot")
-        
-        # ... (rest of the plotting and download buttons remain exactly the same) ...
+
         if plot_type in ["Line plot", "All"] and profile_data:
             st.subheader("📈 Line Plot Results")
             fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names)
@@ -582,6 +641,7 @@ def main():
         
         if plot_type in ["Heatmap", "All"] and profile_data:
             st.subheader("🔥 Consolidated Heatmap Comparison")
+            # Use heatmap settings from the sidebar
             fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names, cmap_choice, sort_regions, vmin, vmax)
             if fig:
                 st.pyplot(fig)
@@ -589,89 +649,12 @@ def main():
                 st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key="dl_heatmap")
         
         st.header("💾 Export Signal Data")
-        analysis_params = results['analysis_params']
-        analysis_params.update({'plot_type': plot_type, 'y_max': y_max, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax})
-        excel_buffer = export_signal_data_to_excel(signals_data, profile_data, custom_bigwig_names, custom_bed_names, results['bigwig_file_names'], analysis_params)
-        st.download_button("📊 Download All Results (Excel)", excel_buffer, f"signal_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_excel")
+        # Use the current sidebar settings for the export file's metadata
+        export_params = results['analysis_params'].copy()
+        export_params.update({'plot_type': plot_type, 'y_max': y_max, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax})
+        excel_buffer = export_signal_data_to_excel(signals_data, profile_data, custom_bigwig_names, custom_bed_names, results['bigwig_file_names'], export_params)
+        st.download_button("📊 Download Signal Data (Excel)", excel_buffer, f"signal_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_excel")
 
-
-    # --- NEW ANALYSIS BLOCK (only shows if no results are loaded) ---
-    else:
-        st.markdown("---"); st.header("🔬 New Analysis")
-        
-        col1, col2 = st.columns(2)
-        replicate_groups = None
-        with col1:
-            st.subheader("📁 Upload BigWig Files")
-            bigwig_files = st.file_uploader("Choose .bw files", type=['bw', 'bigwig'], accept_multiple_files=True, disabled=st.session_state.analysis_running)
-            if bigwig_files and len(bigwig_files) > 1:
-                if st.checkbox("🔗 Enable replicate grouping", False, disabled=st.session_state.analysis_running):
-                    replicate_groups = setup_replicate_groups(bigwig_files)
-                else: replicate_groups = [[i] for i in range(len(bigwig_files))]
-            elif bigwig_files: replicate_groups = [[0]]
-        
-        with col2:
-            st.subheader("📄 Upload BED Files")
-            bed_files = st.file_uploader("Choose .bed files", type=['bed'], accept_multiple_files=True, disabled=st.session_state.analysis_running)
-
-        run_button_clicked = st.button("🚀 Run Analysis", type="primary", use_container_width=True, disabled=not bigwig_files or not bed_files or st.session_state.analysis_running)
-        
-        if run_button_clicked:
-            st.session_state.analysis_running = True
-            st.rerun()
-
-        if st.session_state.analysis_running:
-            with st.spinner("Analysis in progress... This may take a moment."):
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    try:
-                        # ... (The entire analysis logic remains the same) ...
-                        bigwig_paths = [save_uploaded_file(f, temp_dir) for f in bigwig_files]
-                        bed_paths = {Path(f.name).stem: save_uploaded_file(f, temp_dir) for f in bed_files}
-                        bed_names_ordered = [Path(f.name).stem for f in bed_files]
-                        
-                        grouped_bigwig_paths = [[bigwig_paths[i] for i in group] for group in replicate_groups]
-                        group_names = [Path(bigwig_files[g[0]].name).stem if len(g) == 1 else f"{Path(bigwig_files[g[0]].name).stem}_group" for g in replicate_groups]
-                        
-                        progress_bar = st.progress(0); status_text = st.empty()
-                        signals_data, profile_data = [], []
-                        
-                        total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
-                        current_task = 0
-                        
-                        for group_idx, group_paths in enumerate(grouped_bigwig_paths):
-                            signals_dict, profile_dict = {}, {}
-                            for bed_name, bed_path in bed_paths.items():
-                                current_task += 1
-                                progress = current_task / total_tasks
-                                status_text.text(f"Processing: {group_names[group_idx]} on {bed_name} ({current_task}/{total_tasks})")
-                                progress_bar.progress(progress)
-
-                                if plot_type in ["Boxplot", "All"] and extend_bp is not None:
-                                    signals_dict[bed_name] = extract_signals_fast(group_paths, bed_path, extend_bp, max_regions)
-                                if plot_type in ["Line plot", "Heatmap", "All"]:
-                                    profile_dict[bed_name] = extract_signals_for_profile(group_paths, bed_path, 2000, max_regions, 20)
-                            
-                            if signals_dict: signals_data.append(signals_dict)
-                            if profile_dict: profile_data.append(profile_dict)
-                        
-                        status_text.text("✅ Analysis complete! Caching results..."); progress_bar.progress(1.0)
-                        
-                        analysis_params = {'plot_type': plot_type, 'y_max': y_max, 'extend_bp': extend_bp, 'max_regions': max_regions, 'line_extend': 2000, 'line_bin_size': 20, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax}
-                        st.session_state.analysis_results = {
-                            "signals_data": signals_data,
-                            "profile_data": profile_data,
-                            "group_names": group_names,
-                            "bed_names_ordered": bed_names_ordered,
-                            "bigwig_file_names": [f.name for f in bigwig_files],
-                            "analysis_params": analysis_params
-                        }
-
-                    except Exception as e:
-                        st.error(f"An error occurred during analysis: {e}")
-                        st.exception(e)
-                    finally:
-                        st.session_state.analysis_running = False
-                        st.rerun()
 
 if __name__ == "__main__":
     main()
