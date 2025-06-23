@@ -76,8 +76,8 @@ A Streamlit web application for analyzing ChIP-seq signal data from BigWig files
 
 ### Boxplot
 
-![Boxplot Example](https://github.com/user-attachments/assets/4a02a37c-022a-4de7-9cc8-8dfef30608be) 
+![Boxplot Example](https://github.com/user-attachments/assets/a8ead954-5b40-44dd-b11f-e01a1275dd6d)
 
 ### Lineplot
 
-![Lineplot Example](https://github.com/user-attachments/assets/6291f917-aaef-4203-ae56-06351a1897ec)
+![Lineplot Example](https://github.com/user-attachments/assets/874d4c18-0711-429b-a66c-4f33c5e2aa6d)
