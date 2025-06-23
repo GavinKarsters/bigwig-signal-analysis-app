@@ -365,12 +365,12 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     return fig
 
-# --- NEW: COMPARISON HEATMAP FUNCTION ---
+# --- UPDATED: COMPARISON HEATMAP FUNCTION WITH LAYOUT FIXES ---
 def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_bed_names=None,
                                cmap='viridis', sort_regions=True, vmin=0.0, vmax=10.0):
     """
     Creates a dictionary of figures, one for each BED file,
-    comparing BigWig groups side-by-side.
+    comparing BigWig groups side-by-side with layout adjustments.
     """
     if not profile_data or not profile_data[0]:
         return {}
@@ -382,26 +382,23 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         original_bed_name = name_mapping.get(custom_bed_name)
         if not original_bed_name: continue
 
-        # Check if reference data (first BigWig) exists for this BED file
         if not (original_bed_name in profile_data[0] and profile_data[0][original_bed_name]):
             continue
 
-        # --- Pre-calculate sorting order from the reference sample (first BigWig) ---
         ref_matrix = profile_data[0][original_bed_name]['all_profiles']
         if sort_regions and ref_matrix.shape[0] > 1:
             mean_signal = ref_matrix.mean(axis=1)
-            sorted_indices = np.argsort(mean_signal)[::-1]  # Sort descending
+            sorted_indices = np.argsort(mean_signal)[::-1]
         else:
             sorted_indices = np.arange(ref_matrix.shape[0])
 
-        # --- Create the figure for this BED file ---
         n_bws = len(bigwig_names)
-        fig, axes = plt.subplots(1, n_bws, figsize=(5 * n_bws, 5), sharey=True, squeeze=False)
+        # --- FIX: Reduced figure height for more compact plots ---
+        fig, axes = plt.subplots(1, n_bws, figsize=(4 * n_bws, 4), sharey=True, squeeze=False)
         axes = axes.flatten()
 
         im = None
         for i, (ax, bw_name) in enumerate(zip(axes, bigwig_names)):
-            # Check for data for this specific BigWig/BED combination
             if not (i < len(profile_data) and original_bed_name in profile_data[i] and profile_data[i][original_bed_name]):
                 ax.text(0.5, 0.5, "No Data", ha='center', va='center', fontsize=12)
                 ax.set_title(bw_name, fontweight='bold')
@@ -410,16 +407,11 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 continue
             
             p_data = profile_data[i][original_bed_name]
-            matrix = p_data['all_profiles']
-            
-            # Apply the pre-calculated sorting order to all heatmaps
-            matrix = matrix[sorted_indices, :]
+            matrix = p_data['all_profiles'][sorted_indices, :]
 
-            # --- Plot the heatmap (no top plot) ---
             im = ax.imshow(matrix, aspect='auto', interpolation='none', cmap=cmap, vmin=vmin, vmax=vmax)
             ax.set_title(f"{bw_name}\n(n={p_data['n_regions']})", fontweight='bold')
             
-            # --- Customize Axes ---
             if i == 0:
                 ax.set_ylabel("Regions (Sorted by 1st Sample)")
             ax.set_yticks([])
@@ -431,16 +423,16 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
             ax.set_xticks(tick_pos)
             ax.set_xticklabels(tick_labels)
 
-        # --- Add a single, shared colorbar for the figure ---
         if im:
             cax = fig.add_axes([axes[-1].get_position().x1 + 0.01, axes[-1].get_position().y0, 0.02, axes[-1].get_position().height])
             fig.colorbar(im, cax=cax, label="Signal Intensity")
 
-        fig.suptitle(f"Heatmap Comparison for: {custom_bed_name}", fontsize=16, fontweight='bold')
+        # --- FIX: Adjusted title position to prevent overlap ---
+        fig.suptitle(f"Heatmap Comparison for: {custom_bed_name}", fontsize=16, fontweight='bold', y=1.05)
+        plt.tight_layout(rect=[0, 0, 1, 0.98])
         figs[custom_bed_name] = fig
         
     return figs
-
 
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
@@ -465,7 +457,7 @@ def main():
         st.header("🔧 Plot Settings")
         
         plot_type_options = ["Boxplot", "Line plot", "Heatmap", "All"]
-        default_index = 3 # Default to 'All'
+        default_index = 3 
 
         if pre_extracted_data:
             saved_plot_type = pre_extracted_data['analysis_params'].get('plot_type', 'All')
