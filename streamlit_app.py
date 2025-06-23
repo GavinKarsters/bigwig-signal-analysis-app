@@ -854,12 +854,139 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     
     return fig
 
+def create_heatmap_plot(profile_dict_list, bigwig_names, bed_names_ordered, original_bed_names=None):
+    """Create heatmap plot showing individual region signals - similar to deepTools"""
+    
+    # Create mapping from custom names to original names if provided
+    if original_bed_names is not None:
+        name_mapping = dict(zip(bed_names_ordered, original_bed_names))
+    else:
+        name_mapping = {name: name for name in bed_names_ordered}
+    
+    # Check which BED files have data across BigWig groups
+    valid_groups = []
+    for custom_name in bed_names_ordered:
+        original_name = name_mapping[custom_name]
+        
+        # Check if at least one BigWig group has data for this BED file
+        has_data_in_any_bigwig = False
+        for bigwig_idx in range(len(bigwig_names)):
+            if (original_name in profile_dict_list[bigwig_idx] and 
+                profile_dict_list[bigwig_idx][original_name] is not None):
+                has_data_in_any_bigwig = True
+                break
+        
+        if has_data_in_any_bigwig:
+            valid_groups.append((custom_name, original_name))
+    
+    if not valid_groups:
+        st.error("No valid profiles to plot")
+        return None
+    
+    n_groups = len(valid_groups)
+    n_bigwigs = len(bigwig_names)
+    
+    # Calculate subplot layout - one heatmap per BigWig group
+    if n_bigwigs == 1:
+        fig, axes = plt.subplots(n_groups, 1, figsize=(12, 3*n_groups + 2))
+        if n_groups == 1:
+            axes = [axes]
+    else:
+        # Multiple BigWig groups - create side-by-side comparison
+        fig, axes = plt.subplots(n_groups, n_bigwigs, figsize=(6*n_bigwigs, 3*n_groups + 2))
+        if n_groups == 1:
+            axes = axes.reshape(1, -1)
+        elif n_bigwigs == 1:
+            axes = axes.reshape(-1, 1)
+    
+    # Process each BED file group
+    for group_idx, (custom_name, original_name) in enumerate(valid_groups):
+        
+        for bigwig_idx, bigwig_name in enumerate(bigwig_names):
+            
+            # Get the appropriate axis
+            if n_bigwigs == 1:
+                ax = axes[group_idx]
+            else:
+                ax = axes[group_idx, bigwig_idx]
+            
+            # Check if this BigWig has data for this BED file
+            if (original_name in profile_dict_list[bigwig_idx] and 
+                profile_dict_list[bigwig_idx][original_name] is not None):
+                
+                profile_data = profile_dict_list[bigwig_idx][original_name]
+                all_profiles = profile_data['all_profiles']
+                positions = profile_data['positions']
+                n_regions = profile_data['n_regions']
+                
+                # Limit number of regions displayed (for performance)
+                max_display_regions = min(500, all_profiles.shape[0])
+                display_profiles = all_profiles[:max_display_regions]
+                
+                # Sort regions by mean signal (highest at top, like deepTools)
+                region_means = np.mean(display_profiles, axis=1)
+                sort_indices = np.argsort(region_means)[::-1]  # Descending order
+                sorted_profiles = display_profiles[sort_indices]
+                
+                # Create heatmap
+                im = ax.imshow(sorted_profiles, 
+                              aspect='auto',
+                              cmap='RdYlBu_r',  # Red-Yellow-Blue colormap (red=high signal)
+                              interpolation='bilinear',
+                              extent=[positions[0], positions[-1], 0, max_display_regions])
+                
+                # Customize the heatmap
+                if n_bigwigs == 1:
+                    title = f"{custom_name}\n{bigwig_name} (n={n_regions})"
+                else:
+                    title = f"{custom_name}\n{bigwig_name}"
+                
+                ax.set_title(title, fontsize=11, fontweight='bold')
+                ax.set_xlabel('Distance from Peak Center (bp)', fontsize=10)
+                ax.set_ylabel(f'Regions (top {max_display_regions})', fontsize=10)
+                
+                # Add vertical line at center
+                ax.axvline(x=0, color='white', linestyle='-', alpha=0.8, linewidth=1)
+                
+                # Add colorbar
+                plt.colorbar(im, ax=ax, label='Signal Intensity', shrink=0.8)
+                
+                # Add region count info if we're showing fewer than total
+                if max_display_regions < n_regions:
+                    ax.text(0.02, 0.98, f'Showing top {max_display_regions}/{n_regions} regions', 
+                           transform=ax.transAxes, fontsize=8, 
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                           verticalalignment='top')
+            
+            else:
+                # No data for this combination
+                ax.text(0.5, 0.5, f'No data\nfor {custom_name}\nin {bigwig_name}', 
+                       transform=ax.transAxes, ha='center', va='center',
+                       fontsize=10, style='italic')
+                ax.set_title(f"{custom_name} - {bigwig_name}", fontsize=11)
+                ax.set_xticks([])
+                ax.set_yticks([])
+    
+    # Set overall title
+    if n_bigwigs == 1:
+        suptitle = f'{bigwig_names[0]} Signal Heatmaps'
+    else:
+        suptitle = f'Signal Heatmap Comparison Across BigWig Groups'
+    
+    fig.suptitle(suptitle, fontsize=14, fontweight='bold', y=0.98)
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.90)
+    
+    return fig
+
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
     st.markdown("""
     Upload BigWig and BED files to analyze signal distributions.
     - **Boxplots**: Show signal distribution at peak centers (±500bp, customizable)
     - **Line plots**: Show signal profiles across regions (±2000bp, auto-scaled)
+    - **Heatmaps**: Show individual region signals sorted by intensity (deepTools-style)
     - **Replicate Averaging**: Automatically average biological replicates during signal extraction
     - **Signal Matrix Export/Import**: Export extracted signals and re-import for instant plotting
     """)
@@ -925,13 +1052,13 @@ def main():
             original_plot_type = pre_extracted_data['analysis_params'].get('plot_type', 'Both')
             plot_type = st.selectbox(
                 "Select plot type:",
-                ["Boxplot", "Line plot", "Both"],
-                index=["Boxplot", "Line plot", "Both"].index(original_plot_type) if original_plot_type in ["Boxplot", "Line plot", "Both"] else 0,
+                ["Boxplot", "Line plot", "Heatmap", "All plots"],
+                index=["Boxplot", "Line plot", "Heatmap", "All plots"].index(original_plot_type) if original_plot_type in ["Boxplot", "Line plot", "Heatmap", "All plots"] else 0,
                 help="Choose the type of visualization"
             )
             
             # Boxplot settings
-            if plot_type in ["Boxplot", "Both"]:
+            if plot_type in ["Boxplot", "All plots"]:
                 st.subheader("Boxplot Settings")
                 original_y_max = pre_extracted_data['analysis_params'].get('y_max', 25.0)
                 y_max = st.number_input(
@@ -962,7 +1089,7 @@ def main():
             st.session_state.current_plots = {}
         
         # Generate plots instantly
-        if plot_type in ["Boxplot", "Both"] and signals_data:
+        if plot_type in ["Boxplot", "All plots"] and signals_data:
             st.header("📊 Boxplot Results")
             try:
                 if len(original_group_names) == 1:
@@ -997,7 +1124,7 @@ def main():
                 st.error(f"Error creating boxplot: {e}")
                 st.exception(e)
         
-        if plot_type in ["Line plot", "Both"] and profile_data:
+        if plot_type in ["Line plot", "All plots"] and profile_data:
             st.header("📈 Line Plot Results")
             try:
                 # Create plot with name mapping
@@ -1028,6 +1155,37 @@ def main():
                 st.error(f"Error creating line plot: {e}")
                 st.exception(e)
         
+        if plot_type in ["Heatmap", "All plots"] and profile_data:
+            st.header("🔥 Heatmap Results")
+            try:
+                # Create plot with name mapping
+                fig_heatmap = create_heatmap_plot(
+                    profile_data, 
+                    custom_bigwig_names, 
+                    custom_bed_names, 
+                    original_bed_names=original_bed_names
+                )
+                
+                if fig_heatmap:
+                    st.session_state.current_plots['heatmap'] = fig_heatmap
+                    
+                    # Display plot
+                    st.pyplot(fig_heatmap, use_container_width=True)
+                    
+                    # Download button with format selection
+                    plot_data, filename, mime_type = export_plot_with_format(fig_heatmap, "signal_heatmap", export_format)
+                    
+                    st.download_button(
+                        label=f"📥 Download Heatmap ({export_format})",
+                        data=plot_data,
+                        file_name=filename,
+                        mime=mime_type
+                    )
+                
+            except Exception as e:
+                st.error(f"Error creating heatmap: {e}")
+                st.exception(e)
+        
         return  # Skip the rest of the UI
     
     # Original analysis workflow
@@ -1046,13 +1204,13 @@ def main():
         # Plot type selection
         plot_type = st.selectbox(
             "Select plot type:",
-            ["Boxplot", "Line plot", "Both"],
+            ["Boxplot", "Line plot", "Heatmap", "All plots"],
             help="Choose the type of visualization",
             disabled=st.session_state.analysis_running  # Disable during analysis
         )
         
         # Boxplot settings
-        if plot_type in ["Boxplot", "Both"]:
+        if plot_type in ["Boxplot", "All plots"]:
             st.subheader("Boxplot Settings")
             y_max = st.number_input(
                 "Y-axis maximum:",
@@ -1220,7 +1378,7 @@ def main():
                 
                 # Extract signals
                 signals_data = None
-                if plot_type in ["Boxplot", "Both"]:
+                if plot_type in ["Boxplot", "All plots"]:
                     status_text.text("Extracting signals for boxplots...")
                     
                     signals_data = []
@@ -1231,7 +1389,10 @@ def main():
                         signals_dict = {}
                         for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
                             current_task += 1
-                            progress = (current_task / total_tasks) * (0.5 if plot_type == "Both" else 1.0)
+                            if plot_type == "All plots":
+                                progress = (current_task / total_tasks) * 0.33
+                            else:
+                                progress = current_task / total_tasks
                             progress_bar.progress(progress)
                             
                             signals = extract_signals_fast([group_paths], bed_path, extend=extend_bp, max_regions=max_regions)
@@ -1240,8 +1401,8 @@ def main():
                         signals_data.append(signals_dict)
                 
                 profile_data = None
-                if plot_type in ["Line plot", "Both"]:
-                    status_text.text("Extracting profiles for line plots...")
+                if plot_type in ["Line plot", "Heatmap", "All plots"]:
+                    status_text.text("Extracting profiles for line plots and heatmaps...")
                     
                     profile_data = []
                     total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
@@ -1251,8 +1412,8 @@ def main():
                         profile_dict = {}
                         for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
                             current_task += 1
-                            if plot_type == "Both":
-                                progress = 0.5 + (current_task / total_tasks) * 0.5
+                            if plot_type == "All plots":
+                                progress = 0.33 + (current_task / total_tasks) * 0.67
                             else:
                                 progress = current_task / total_tasks
                             progress_bar.progress(progress)
@@ -1267,111 +1428,4 @@ def main():
                 
                 # Custom names setup
                 custom_bigwig_names, custom_bed_names = setup_custom_names(
-                    group_names, bed_names_ordered, mode="new_analysis"
-                )
-                
-                # Store analysis parameters for export
-                analysis_params = {
-                    'plot_type': plot_type,
-                    'y_max': y_max if plot_type in ["Boxplot", "Both"] else None,
-                    'extend_bp': extend_bp if plot_type in ["Boxplot", "Both"] else None,
-                    'max_regions': max_regions,
-                    'line_extend': 2000,
-                    'line_bin_size': 20
-                }
-                
-                # Store plots in session state to prevent disappearing
-                if 'current_plots' not in st.session_state:
-                    st.session_state.current_plots = {}
-                
-                # Create plots
-                if plot_type in ["Boxplot", "Both"] and signals_data:
-                    st.header("📊 Boxplot Results")
-                    try:
-                        if len(custom_bigwig_names) == 1:
-                            signals_dict = signals_data[0]
-                        else:
-                            signals_dict = signals_data
-                            
-                        fig_box = create_single_boxplot(signals_dict, custom_bigwig_names, custom_bed_names, y_max)
-                        st.session_state.current_plots['boxplot'] = fig_box
-                        
-                        st.pyplot(fig_box, use_container_width=True)
-                        
-                        # Download button with format selection
-                        plot_data, filename, mime_type = export_plot_with_format(fig_box, "signal_boxplot", export_format)
-                        
-                        st.download_button(
-                            label=f"📥 Download Boxplot ({export_format})",
-                            data=plot_data,
-                            file_name=filename,
-                            mime=mime_type
-                        )
-                        
-                    except Exception as e:
-                        st.error(f"Error creating boxplot: {e}")
-                        st.exception(e)
-                
-                if plot_type in ["Line plot", "Both"] and profile_data:
-                    st.header("📈 Line Plot Results")
-                    try:
-                        fig_line = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names)
-                        
-                        if fig_line:
-                            st.session_state.current_plots['lineplot'] = fig_line
-                            
-                            st.pyplot(fig_line, use_container_width=True)
-                            
-                            # Download button with format selection
-                            plot_data, filename, mime_type = export_plot_with_format(fig_line, "signal_lineplot", export_format)
-                            
-                            st.download_button(
-                                label=f"📥 Download Line Plot ({export_format})",
-                                data=plot_data,
-                                file_name=filename,
-                                mime=mime_type
-                            )
-                        
-                    except Exception as e:
-                        st.error(f"Error creating line plot: {e}")
-                        st.exception(e)
-                
-                # Export signal data to Excel
-                st.header("💾 Export Signal Data")
-                st.info("Export extracted signal data to Excel file for future use. This allows you to skip signal extraction and generate plots instantly.")
-                
-                try:
-                    excel_buffer = export_signal_data_to_excel(
-                        signals_data, profile_data, custom_bigwig_names, custom_bed_names, 
-                        bigwig_file_names, analysis_params
-                    )
-                    
-                    # Generate filename with timestamp
-                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-                    filename = f"bigwig_signal_data_{timestamp}.xlsx"
-                    
-                    st.download_button(
-                        label="📊 Download Signal Data (Excel)",
-                        data=excel_buffer,
-                        file_name=filename,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        help="Download extracted signal data for future analysis"
-                    )
-                    
-                    st.success("✅ Signal data export ready! You can re-upload this file later to skip signal extraction.")
-                    
-                except Exception as e:
-                    st.error(f"Error exporting signal data: {e}")
-                    st.exception(e)
-                
-                status_text.text("✅ Analysis complete!")
-                
-            except Exception as e:
-                st.error(f"An error occurred during analysis: {e}")
-                st.exception(e)
-            finally:
-                # Reset analysis state
-                st.session_state.analysis_running = False
-
-if __name__ == "__main__":
-    main()
+                    group_names
