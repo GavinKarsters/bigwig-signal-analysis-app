@@ -259,57 +259,85 @@ def setup_replicate_groups(bigwig_files):
     st.session_state.replicate_groups = new_groups
     return new_groups
 
-def extract_signals_fast(bigwig_file_groups, bed_file, extend=500, max_regions=5000):
+def extract_signals_fast(bigwig_file_group, bed_file, extend=500, max_regions=5000):
     try:
         bed_df = pd.read_csv(bed_file, sep='\t', header=None, usecols=[0, 1, 2], names=['chr', 'start', 'end'], dtype={'chr': str, 'start': int, 'end': int})
         if len(bed_df) > max_regions: bed_df = bed_df.sample(n=max_regions, random_state=42)
     except Exception as e: return []
     try:
-        all_bw_handles = [[pyBigWig.open(p) for p in group] for group in bigwig_file_groups]
+        bw_handles = [pyBigWig.open(p) for p in bigwig_file_group]
     except Exception as e: return []
+    
     signals = []
     for _, row in bed_df.iterrows():
         center = (row['start'] + row['end']) // 2
-        group_signals = []
-        for group_handles in all_bw_handles:
-            rep_signals = [np.mean([v for v in bw.values(row['chr'], max(0, center-extend), center+extend) if v is not None and not np.isnan(v)] or [0]) for bw in group_handles]
-            group_signals.append(np.mean(rep_signals) if rep_signals else 0)
-        signals.append(np.mean(group_signals) if group_signals else 0)
-    for group in all_bw_handles:
-        for bw in group: bw.close()
+        
+        # Average within the replicate group
+        rep_signals = [np.mean([v for v in bw.values(row['chr'], max(0, center-extend), center+extend) if v is not None and not np.isnan(v)] or [0]) for bw in bw_handles]
+        signals.append(np.mean(rep_signals) if rep_signals else 0)
+
+    for bw in bw_handles: bw.close()
     return signals
 
-def extract_signals_for_profile(bigwig_file_groups, bed_file, extend=2000, max_regions=5000, bin_size=20):
+# --- FIXED AND REFACTORED SIGNAL EXTRACTION FUNCTION ---
+def extract_signals_for_profile(bigwig_file_group, bed_file, extend=2000, max_regions=5000, bin_size=20):
+    """
+    Extracts and bins signal for a SINGLE replicate group.
+    The binning logic has been corrected.
+    """
     try:
         bed_df = pd.read_csv(bed_file, sep='\t', header=None, usecols=[0, 1, 2], names=['chr', 'start', 'end'], dtype={'chr': str, 'start': int, 'end': int})
         if len(bed_df) > max_regions: bed_df = bed_df.sample(n=max_regions, random_state=42)
-    except Exception as e: return None
+    except Exception:
+        return None
+
     try:
-        all_bw_handles = [[pyBigWig.open(p) for p in group] for group in bigwig_file_groups]
-    except Exception as e: return None
+        bw_handles = [pyBigWig.open(p) for p in bigwig_file_group]
+    except Exception:
+        return None
+
     n_bins = (extend * 2) // bin_size
-    all_profiles = []
+    all_profiles_for_all_regions = []
+
     for _, row in bed_df.iterrows():
         center = (row['start'] + row['end']) // 2
         start, end = max(0, center - extend), center + extend
-        group_profiles = []
-        for group_handles in all_bw_handles:
-            rep_profiles = []
-            for bw in group_handles:
-                vals = bw.values(row['chr'], start, end, numpy=True)
-                if vals is not None and len(vals) > 0:
-                    vals = np.nan_to_num(vals)
-                    binned = np.mean(vals[:len(vals)//n_bins*n_bins].reshape(-1, n_bins), axis=0) if len(vals) >= n_bins else np.pad(vals, (0, n_bins - len(vals)))
-                    rep_profiles.append(binned)
-                else: rep_profiles.append(np.zeros(n_bins))
-            group_profiles.append(np.mean(rep_profiles, axis=0) if rep_profiles else np.zeros(n_bins))
-        if group_profiles: all_profiles.append(np.mean(group_profiles, axis=0))
-    for group in all_bw_handles:
-        for bw in group: bw.close()
-    if not all_profiles: return None
-    all_profiles = np.array(all_profiles)
-    return {'positions': np.linspace(-extend, extend, n_bins), 'mean_signal': np.mean(all_profiles, axis=0),
-            'std_signal': np.std(all_profiles, axis=0), 'all_profiles': all_profiles, 'n_regions': len(all_profiles)}
+        
+        replicate_profiles = []
+        for bw in bw_handles:
+            vals = bw.values(row['chr'], start, end, numpy=True)
+            if vals is not None and len(vals) > 0:
+                vals = np.nan_to_num(vals)
+                
+                # --- CORRECTED BINNING LOGIC ---
+                # Reshape to (number_of_bins, values_per_bin) and take mean over axis 1
+                vals_per_bin = len(vals) // n_bins
+                if vals_per_bin > 0:
+                    binned_vals = np.mean(vals[:vals_per_bin * n_bins].reshape(n_bins, -1), axis=1)
+                    replicate_profiles.append(binned_vals)
+                else: # Fallback for very small regions
+                    replicate_profiles.append(np.zeros(n_bins))
+            else:
+                replicate_profiles.append(np.zeros(n_bins))
+        
+        # Average the profiles from the replicates for this one genomic region
+        if replicate_profiles:
+            all_profiles_for_all_regions.append(np.mean(replicate_profiles, axis=0))
+
+    for bw in bw_handles:
+        bw.close()
+
+    if not all_profiles_for_all_regions:
+        return None
+
+    all_profiles = np.array(all_profiles_for_all_regions)
+    return {
+        'positions': np.linspace(-extend, extend, n_bins),
+        'mean_signal': np.mean(all_profiles, axis=0),
+        'std_signal': np.std(all_profiles, axis=0),
+        'all_profiles': all_profiles,
+        'n_regions': len(all_profiles)
+    }
 
 def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_max, original_bed_names=None):
     name_mapping = dict(zip(bed_names_ordered, original_bed_names)) if original_bed_names else {n: n for n in bed_names_ordered}
@@ -365,7 +393,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     return fig
 
-# --- REWRITTEN: CONSOLIDATED HEATMAP FUNCTION ---
 def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_bed_names=None,
                                cmap='viridis', sort_regions=True, vmin=0.0, vmax=10.0):
     """
@@ -377,7 +404,6 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
 
     name_mapping = dict(zip(bed_names, original_bed_names)) if original_bed_names else {n: n for n in bed_names}
     
-    # Filter for BED files that have at least data for the reference sample (first BigWig)
     valid_beds = [
         (c, name_mapping[c]) for c in bed_names 
         if name_mapping.get(c) in profile_data[0] and profile_data[0][name_mapping.get(c)]
@@ -385,17 +411,14 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     if not valid_beds:
         return None
 
-    # --- Create one large figure for all comparisons ---
     nrows = len(valid_beds)
     ncols = len(bigwig_names)
     fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3.5 * nrows), sharex=True, squeeze=False)
 
-    im = None  # To hold the last image mappable for the colorbar
+    im = None 
 
-    # --- Iterate through rows (BED files) and columns (BigWig files) ---
     for row_idx, (custom_bed_name, original_bed_name) in enumerate(valid_beds):
         
-        # Determine the sorting order from the reference sample (first BigWig) for this row
         ref_matrix = profile_data[0][original_bed_name]['all_profiles']
         if sort_regions and ref_matrix.shape[0] > 1:
             sorted_indices = np.argsort(ref_matrix.mean(axis=1))[::-1]
@@ -405,31 +428,26 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         for col_idx, bw_name in enumerate(bigwig_names):
             ax = axes[row_idx, col_idx]
 
-            # Set BigWig titles only on the top row
             if row_idx == 0:
                 ax.set_title(bw_name, fontweight='bold', fontsize=12)
 
-            # Set BED file name as the Y-axis label on the first column
             if col_idx == 0:
                 ax.set_ylabel(custom_bed_name, fontweight='bold', fontsize=12)
             
-            # Plotting logic
             if not (col_idx < len(profile_data) and original_bed_name in profile_data[col_idx] and profile_data[col_idx][original_bed_name]):
                 ax.text(0.5, 0.5, "No Data", ha='center', va='center')
-                ax.set_yticks([]) # Still remove ticks for empty plots
+                ax.set_yticks([])
             else:
                 p_data = profile_data[col_idx][original_bed_name]
                 matrix = p_data['all_profiles'][sorted_indices, :]
                 
                 im = ax.imshow(matrix, aspect='auto', interpolation='none', cmap=cmap, vmin=vmin, vmax=vmax)
                 
-                # Add n-count to the plot area for clarity
                 ax.text(0.02, 0.98, f"n={p_data['n_regions']}", transform=ax.transAxes, 
                         ha='left', va='top', fontsize=9, bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.5))
                 
                 ax.set_yticks([])
 
-            # Set X-axis labels and ticks only for the bottom row
             if row_idx == nrows - 1:
                 positions = profile_data[0][original_bed_name]['positions']
                 tick_pos = np.linspace(0, len(positions) - 1, 5)
@@ -440,11 +458,9 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
             else:
                 ax.set_xticklabels([])
 
-    # --- Add a single, shared colorbar for the entire figure ---
     if im:
-        # Adjust subplot parameters to make room for the colorbar
         fig.subplots_adjust(right=0.9)
-        cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7]) # [left, bottom, width, height]
+        cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
         fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
 
     return fig
@@ -530,7 +546,6 @@ def main():
                 f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format)
                 st.download_button(f"📥 Download Line Plot ({export_format})", f_data, f_name, f_mime)
         
-        # --- MODIFIED: Calling the new consolidated heatmap function ---
         if plot_type in ["Heatmap", "All"] and profile_data:
             st.subheader("🔥 Consolidated Heatmap Comparison")
             fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names, cmap_choice, sort_regions, vmin, vmax)
@@ -579,20 +594,19 @@ def main():
                 
                 progress_bar = st.progress(0); status_text = st.empty()
                 signals_data, profile_data = [], []
-                total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
                 
                 for group_idx, group_paths in enumerate(grouped_bigwig_paths):
                     signals_dict, profile_dict = {}, {}
                     for bed_idx, (bed_name, bed_path) in enumerate(bed_paths.items()):
                         current_task = group_idx * len(bed_paths) + bed_idx + 1
-                        progress = current_task / total_tasks
-                        status_text.text(f"Processing: {group_names[group_idx]} on {bed_name} ({current_task}/{total_tasks})")
+                        progress = (current_task) / (len(grouped_bigwig_paths) * len(bed_paths))
+                        status_text.text(f"Processing: {group_names[group_idx]} on {bed_name} ({current_task}/{len(grouped_bigwig_paths) * len(bed_paths)})")
                         progress_bar.progress(progress)
 
                         if plot_type in ["Boxplot", "All"] and extend_bp:
-                            signals_dict[bed_name] = extract_signals_fast([group_paths], bed_path, extend_bp, max_regions)
+                            signals_dict[bed_name] = extract_signals_fast(group_paths, bed_path, extend_bp, max_regions)
                         if plot_type in ["Line plot", "Heatmap", "All"]:
-                            profile_dict[bed_name] = extract_signals_for_profile([group_paths], bed_path, 2000, max_regions, 20)
+                            profile_dict[bed_name] = extract_signals_for_profile(group_paths, bed_path, 2000, max_regions, 20)
                     
                     if signals_dict: signals_data.append(signals_dict)
                     if profile_dict: profile_data.append(profile_dict)
@@ -611,7 +625,6 @@ def main():
                     fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names)
                     st.pyplot(fig); f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format); st.download_button(f"📥 Download Line Plot", f_data, f_name, f_mime)
                 
-                # --- MODIFIED: Calling the new consolidated heatmap function ---
                 if plot_type in ["Heatmap", "All"] and profile_data:
                     st.subheader("🔥 Consolidated Heatmap Comparison")
                     fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, None, cmap_choice, sort_regions, vmin, vmax)
