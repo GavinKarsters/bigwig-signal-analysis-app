@@ -319,8 +319,6 @@ def load_signal_data_from_excel(uploaded_file):
         return None
 
 
-
-
 def setup_replicate_groups(bigwig_files):
     """Setup UI for defining replicate groups"""
     st.subheader("🔗 Replicate Grouping")
@@ -734,17 +732,12 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     else:
         name_mapping = {name: name for name in bed_names_ordered}
     
-    # DEBUG: Show what data we have
-    st.write("DEBUG: Profile data structure:")
-    for bigwig_idx, bigwig_name in enumerate(bigwig_names):
-        st.write(f"BigWig {bigwig_idx} ({bigwig_name}): {list(profile_dict_list[bigwig_idx].keys())}")
-    
-    # FIXED: Include ALL BED files from the metadata, regardless of which BigWig groups have data
+    # FIXED: Check each BED file individually per BigWig group
     valid_groups = []
     for custom_name in bed_names_ordered:
         original_name = name_mapping[custom_name]
         
-        # Check if ANY BigWig group has data for this BED file
+        # Check if at least one BigWig group has data for this BED file
         has_data_in_any_bigwig = False
         for bigwig_idx in range(len(bigwig_names)):
             if (original_name in profile_dict_list[bigwig_idx] and 
@@ -752,19 +745,14 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
                 has_data_in_any_bigwig = True
                 break
         
-        # Include the BED file if ANY BigWig has data for it
         if has_data_in_any_bigwig:
             valid_groups.append((custom_name, original_name))
-            st.write(f"DEBUG: Including {custom_name} (has data)")
-        else:
-            st.write(f"DEBUG: Excluding {custom_name} (no data found)")
     
     if not valid_groups:
         st.error("No valid profiles to plot")
         return None
     
     n_groups = len(valid_groups)
-    st.write(f"DEBUG: Total valid groups to plot: {n_groups}")
     
     # Calculate subplot layout
     if n_groups <= 3:
@@ -795,8 +783,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     for idx, (custom_name, original_name) in enumerate(valid_groups):
         ax = axes[idx]
         
-        st.write(f"DEBUG: Plotting subplot {idx} for {custom_name} (original: {original_name})")
-        
         # Plot data for each BigWig that has this BED file
         plotted_any = False
         for bigwig_idx, bigwig_name in enumerate(bigwig_names):
@@ -809,8 +795,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
                 mean_signal = profile_data['mean_signal']
                 std_signal = profile_data['std_signal']
                 n_regions = profile_data['n_regions']
-                
-                st.write(f"DEBUG: Plotting {bigwig_name} for {custom_name}, n_regions={n_regions}")
                 
                 # Plot mean line - use upload order for line styles
                 line_style = '-' if bigwig_idx == 0 else '--'
@@ -829,8 +813,6 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
                                alpha=0.15)
                 
                 plotted_any = True
-            else:
-                st.write(f"DEBUG: No data for {bigwig_name} in {custom_name}")
         
         if not plotted_any:
             st.warning(f"No data plotted for {custom_name}")
@@ -1258,4 +1240,138 @@ def main():
                         signals_data.append(signals_dict)
                 
                 profile_data = None
-                if plot_type in ["Line plot
+                if plot_type in ["Line plot", "Both"]:
+                    status_text.text("Extracting profiles for line plots...")
+                    
+                    profile_data = []
+                    total_tasks = len(grouped_bigwig_paths) * len(bed_paths)
+                    current_task = 0
+                    
+                    for group_idx, group_paths in enumerate(grouped_bigwig_paths):
+                        profile_dict = {}
+                        for i, (bed_path, bed_name) in enumerate(zip(bed_paths, bed_names)):
+                            current_task += 1
+                            if plot_type == "Both":
+                                progress = 0.5 + (current_task / total_tasks) * 0.5
+                            else:
+                                progress = current_task / total_tasks
+                            progress_bar.progress(progress)
+                            
+                            profile = extract_signals_for_profile([group_paths], bed_path, extend=2000, max_regions=max_regions, bin_size=20)
+                            if profile:
+                                profile_dict[bed_name] = profile
+                        profile_data.append(profile_dict)
+                
+                progress_bar.progress(1.0)
+                status_text.text("Creating plots...")
+                
+                # Custom names setup
+                custom_bigwig_names, custom_bed_names = setup_custom_names(
+                    group_names, bed_names_ordered, mode="new_analysis"
+                )
+                
+                # Store analysis parameters for export
+                analysis_params = {
+                    'plot_type': plot_type,
+                    'y_max': y_max if plot_type in ["Boxplot", "Both"] else None,
+                    'extend_bp': extend_bp if plot_type in ["Boxplot", "Both"] else None,
+                    'max_regions': max_regions,
+                    'line_extend': 2000,
+                    'line_bin_size': 20
+                }
+                
+                # Store plots in session state to prevent disappearing
+                if 'current_plots' not in st.session_state:
+                    st.session_state.current_plots = {}
+                
+                # Create plots
+                if plot_type in ["Boxplot", "Both"] and signals_data:
+                    st.header("📊 Boxplot Results")
+                    try:
+                        if len(custom_bigwig_names) == 1:
+                            signals_dict = signals_data[0]
+                        else:
+                            signals_dict = signals_data
+                            
+                        fig_box = create_single_boxplot(signals_dict, custom_bigwig_names, custom_bed_names, y_max)
+                        st.session_state.current_plots['boxplot'] = fig_box
+                        
+                        st.pyplot(fig_box, use_container_width=True)
+                        
+                        # Download button with format selection
+                        plot_data, filename, mime_type = export_plot_with_format(fig_box, "signal_boxplot", export_format)
+                        
+                        st.download_button(
+                            label=f"📥 Download Boxplot ({export_format})",
+                            data=plot_data,
+                            file_name=filename,
+                            mime=mime_type
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"Error creating boxplot: {e}")
+                        st.exception(e)
+                
+                if plot_type in ["Line plot", "Both"] and profile_data:
+                    st.header("📈 Line Plot Results")
+                    try:
+                        fig_line = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names)
+                        
+                        if fig_line:
+                            st.session_state.current_plots['lineplot'] = fig_line
+                            
+                            st.pyplot(fig_line, use_container_width=True)
+                            
+                            # Download button with format selection
+                            plot_data, filename, mime_type = export_plot_with_format(fig_line, "signal_lineplot", export_format)
+                            
+                            st.download_button(
+                                label=f"📥 Download Line Plot ({export_format})",
+                                data=plot_data,
+                                file_name=filename,
+                                mime=mime_type
+                            )
+                        
+                    except Exception as e:
+                        st.error(f"Error creating line plot: {e}")
+                        st.exception(e)
+                
+                # Export signal data to Excel
+                st.header("💾 Export Signal Data")
+                st.info("Export extracted signal data to Excel file for future use. This allows you to skip signal extraction and generate plots instantly.")
+                
+                try:
+                    excel_buffer = export_signal_data_to_excel(
+                        signals_data, profile_data, custom_bigwig_names, custom_bed_names, 
+                        bigwig_file_names, analysis_params
+                    )
+                    
+                    # Generate filename with timestamp
+                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+                    filename = f"bigwig_signal_data_{timestamp}.xlsx"
+                    
+                    st.download_button(
+                        label="📊 Download Signal Data (Excel)",
+                        data=excel_buffer,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        help="Download extracted signal data for future analysis"
+                    )
+                    
+                    st.success("✅ Signal data export ready! You can re-upload this file later to skip signal extraction.")
+                    
+                except Exception as e:
+                    st.error(f"Error exporting signal data: {e}")
+                    st.exception(e)
+                
+                status_text.text("✅ Analysis complete!")
+                
+            except Exception as e:
+                st.error(f"An error occurred during analysis: {e}")
+                st.exception(e)
+            finally:
+                # Reset analysis state
+                st.session_state.analysis_running = False
+
+if __name__ == "__main__":
+    main()
