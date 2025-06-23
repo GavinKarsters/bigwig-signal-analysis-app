@@ -360,32 +360,74 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
     plt.tight_layout()
     return fig
 
+
 def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered, original_bed_names=None):
     name_mapping = dict(zip(bed_names_ordered, original_bed_names)) if original_bed_names else {n: n for n in bed_names_ordered}
     valid_groups = [(c, name_mapping[c]) for c in bed_names_ordered if any(name_mapping[c] in p and p[name_mapping[c]] for p in profile_dict_list)]
-    if not valid_groups: return None
+    if not valid_groups: 
+        return None
+    
     n_groups = len(valid_groups)
-    ncols = min(n_groups, 4); nrows = (n_groups + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 4*nrows + 1), sharey=True, squeeze=False)
+    
+    # Smart layout calculation
+    if n_groups == 1:
+        ncols, nrows = 1, 1
+        fig_width, fig_height = 8, 6  # Single plot gets reasonable size
+    elif n_groups == 2:
+        ncols, nrows = 2, 1
+        fig_width, fig_height = 12, 6  # Two plots side by side
+    elif n_groups <= 4:
+        ncols = min(n_groups, 2)
+        nrows = (n_groups + ncols - 1) // ncols
+        fig_width, fig_height = 6 * ncols, 5 * nrows
+    else:
+        # For many plots, use original logic but with size limits
+        ncols = min(n_groups, 4)
+        nrows = (n_groups + ncols - 1) // ncols
+        fig_width = min(4 * ncols, 16)  # Max width of 16
+        fig_height = min(4 * nrows + 1, 20)  # Max height of 20
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, fig_height), 
+                            sharey=True, squeeze=False)
     axes = axes.flatten()
+    
     colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
+    
     for idx, (custom_name, original_name) in enumerate(valid_groups):
         ax = axes[idx]
         for bw_idx, bw_name in enumerate(bigwig_names):
             if original_name in profile_dict_list[bw_idx] and profile_dict_list[bw_idx][original_name]:
                 p = profile_dict_list[bw_idx][original_name]
-                ax.plot(p['positions'], p['mean_signal'], color=colors[bw_idx % len(colors)], label=f"{bw_name} (n={p['n_regions']})")
+                ax.plot(p['positions'], p['mean_signal'], 
+                       color=colors[bw_idx % len(colors)], 
+                       label=f"{bw_name} (n={p['n_regions']})")
                 if p['n_regions'] > 1:
                     sem = p['std_signal'] / np.sqrt(p['n_regions'])
-                    ax.fill_between(p['positions'], p['mean_signal'] - sem, p['mean_signal'] + sem, color=colors[bw_idx % len(colors)], alpha=0.15)
+                    ax.fill_between(p['positions'], p['mean_signal'] - sem, 
+                                  p['mean_signal'] + sem, 
+                                  color=colors[bw_idx % len(colors)], alpha=0.15)
+        
         ax.set_title(custom_name, fontsize=11, fontweight='bold')
         ax.axvline(x=0, color='black', linestyle=':', alpha=0.5)
-        if len(bigwig_names) > 1: ax.legend(fontsize=8)
-        if idx // ncols == nrows - 1: ax.set_xlabel('Distance from Center (bp)')
-        if idx % ncols == 0: ax.set_ylabel('Mean Signal')
-    for i in range(n_groups, len(axes)): axes[i].set_visible(False)
-    fig.suptitle('Signal Profiles Across BED Files', fontsize=14, fontweight='bold', y=0.98)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+        if len(bigwig_names) > 1: 
+            ax.legend(fontsize=8)
+        if idx // ncols == nrows - 1: 
+            ax.set_xlabel('Distance from Center (bp)')
+        if idx % ncols == 0: 
+            ax.set_ylabel('Mean Signal')
+    
+    # Hide unused subplots
+    for i in range(n_groups, len(axes)): 
+        axes[i].set_visible(False)
+    
+    # Adjust title and layout based on number of plots
+    if n_groups == 1:
+        fig.suptitle('Signal Profile', fontsize=14, fontweight='bold', y=0.95)
+        plt.tight_layout(rect=[0, 0, 1, 0.9])
+    else:
+        fig.suptitle('Signal Profiles Across BED Files', fontsize=14, fontweight='bold', y=0.98)
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+    
     return fig
 
 def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_bed_names=None,
@@ -405,16 +447,36 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     nrows = len(valid_beds)
     ncols = len(bigwig_names)
     
-    fig_width = 4 * ncols + 1
-    fig_height = 3.5 * nrows
+    # Smart figure sizing for heatmaps
+    if ncols == 1 and nrows == 1:
+        # Single heatmap
+        fig_width, fig_height = 8, 6
+    elif ncols == 1:
+        # Single column, multiple rows
+        fig_width = 8
+        fig_height = min(3 * nrows, 15)  # Max height of 15
+    elif nrows == 1:
+        # Single row, multiple columns
+        fig_width = min(5 * ncols, 20)  # Max width of 20
+        fig_height = 6
+    else:
+        # Multiple rows and columns
+        fig_width = min(4 * ncols + 1, 20)
+        fig_height = min(3.5 * nrows, 18)
+    
     fig = plt.figure(figsize=(fig_width, fig_height))
     
-    gs = GridSpec(nrows, ncols + 1, width_ratios=[4] * ncols + [0.2], wspace=0.15, hspace=0.4)
+    # Adjust grid spacing based on size
+    if ncols == 1:
+        gs = GridSpec(nrows, ncols + 1, width_ratios=[4, 0.2], 
+                     wspace=0.1, hspace=0.3)
+    else:
+        gs = GridSpec(nrows, ncols + 1, width_ratios=[4] * ncols + [0.2], 
+                     wspace=0.15, hspace=0.4)
 
     im = None 
 
     for row_idx, (custom_bed_name, original_bed_name) in enumerate(valid_beds):
-        
         ref_matrix = profile_data[0][original_bed_name]['all_profiles']
         if sort_regions and ref_matrix.shape[0] > 1:
             sorted_indices = np.argsort(ref_matrix.mean(axis=1))[::-1]
@@ -424,11 +486,15 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         for col_idx, bw_name in enumerate(bigwig_names):
             ax = fig.add_subplot(gs[row_idx, col_idx])
 
+            # Adjust title font size based on number of columns
+            title_fontsize = 12 if ncols <= 2 else 10
             if row_idx == 0:
-                ax.set_title(bw_name, fontweight='bold', fontsize=12)
+                ax.set_title(bw_name, fontweight='bold', fontsize=title_fontsize)
 
+            # Adjust ylabel font size based on number of rows
+            ylabel_fontsize = 12 if nrows <= 3 else 10
             if col_idx == 0:
-                ax.set_ylabel(custom_bed_name, fontweight='bold', fontsize=12)
+                ax.set_ylabel(custom_bed_name, fontweight='bold', fontsize=ylabel_fontsize)
             
             if not (col_idx < len(profile_data) and original_bed_name in profile_data[col_idx] and profile_data[col_idx][original_bed_name]):
                 ax.text(0.5, 0.5, "No Data", ha='center', va='center')
@@ -438,10 +504,15 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 p_data = profile_data[col_idx][original_bed_name]
                 matrix = p_data['all_profiles'][sorted_indices, :]
                 
-                im = ax.imshow(matrix, aspect='auto', interpolation='none', cmap=cmap, vmin=vmin, vmax=vmax)
+                im = ax.imshow(matrix, aspect='auto', interpolation='none', 
+                              cmap=cmap, vmin=vmin, vmax=vmax)
                 
-                ax.text(0.02, 0.98, f"n={p_data['n_regions']}", transform=ax.transAxes, 
-                        ha='left', va='top', fontsize=9, bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.5))
+                # Adjust annotation font size
+                annotation_fontsize = 9 if ncols <= 2 else 8
+                ax.text(0.02, 0.98, f"n={p_data['n_regions']}", 
+                       transform=ax.transAxes, ha='left', va='top', 
+                       fontsize=annotation_fontsize, 
+                       bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.5))
                 ax.set_yticks([])
 
             if row_idx == nrows - 1:
@@ -449,7 +520,10 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 tick_pos = np.linspace(0, len(positions) - 1, 5)
                 tick_labels = [f'{int(positions[int(p)]/1000)}kb' if positions[int(p)] != 0 else '0' for p in tick_pos]
                 ax.set_xticks(tick_pos)
-                ax.set_xticklabels(tick_labels, fontsize=10)
+                
+                # Adjust tick label font size
+                tick_fontsize = 10 if ncols <= 2 else 9
+                ax.set_xticklabels(tick_labels, fontsize=tick_fontsize)
                 ax.set_xlabel("Distance from Center", fontsize=11)
             else:
                 ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
@@ -459,6 +533,7 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
 
     return fig
+
 
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
