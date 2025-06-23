@@ -459,36 +459,44 @@ def main():
     st.title("📊 BigWig Signal Analysis Tool")
     st.markdown("Upload BigWig/BED files or a pre-extracted Excel file to generate plots.")
 
-    ### CHANGE: Initialize all session state keys at the beginning
+    # --- INITIALIZE SESSION STATE ---
     if 'analysis_running' not in st.session_state:
         st.session_state.analysis_running = False
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = None
 
-    # This part for loading Excel data is mostly fine, but we'll store its result in session state too.
+    # --- DEFINE THE CALLBACK FUNCTION ---
+    def process_excel_upload():
+        """
+        This function is called ONLY when a new file is uploaded.
+        It processes the file and stores the results in session_state.
+        """
+        uploaded_file = st.session_state.get("excel_uploader")
+        if uploaded_file:
+            with st.spinner("Loading pre-extracted data..."):
+                pre_extracted_data = load_signal_data_from_excel(uploaded_file)
+            if pre_extracted_data:
+                st.session_state.analysis_results = pre_extracted_data
+                # We don't need to rerun or clear the uploader here.
+                # The script will rerun automatically after the callback finishes.
+
+    # --- RENDER WIDGETS ---
     st.header("🔄 Import Pre-Extracted Signal Data (Optional)")
-    uploaded_excel = st.file_uploader("Choose an exported signal data file (.xlsx):", type=['xlsx'], key="excel_uploader")
-    
-    if uploaded_excel:
-        with st.spinner("Loading pre-extracted data..."):
-            pre_extracted_data = load_signal_data_from_excel(uploaded_excel)
-        if pre_extracted_data:
-            st.success("✅ Successfully loaded pre-extracted data!")
-            # Store it in session state so it persists
-            st.session_state.analysis_results = pre_extracted_data
-            # Clear the file uploader widget state
-            st.session_state.excel_uploader = None
-            st.rerun() # Rerun once to enter the display logic below
-    
-    # --- Sidebar Setup ---
-    # This setup now correctly reads from session_state if results are present.
+    # Attach the callback function to the file uploader
+    st.file_uploader(
+        "Choose an exported signal data file (.xlsx):",
+        type=['xlsx'],
+        key="excel_uploader",
+        on_change=process_excel_upload
+    )
+
+    # --- SIDEBAR SETUP (remains the same) ---
     with st.sidebar:
         st.header("🔧 Plot Settings")
         
         plot_type_options = ["Boxplot", "Line plot", "Heatmap", "All"]
         default_index = 3 
         
-        # Use results from session state to set defaults
         params_source = {}
         if st.session_state.analysis_results and 'analysis_params' in st.session_state.analysis_results:
             params_source = st.session_state.analysis_results['analysis_params']
@@ -500,11 +508,13 @@ def main():
 
         plot_type = st.selectbox("Select plot type:", plot_type_options, index=default_index)
 
+        y_max = 25.0  # Default value
         if plot_type in ["Boxplot", "All"]:
             st.subheader("Boxplot Settings")
             default_y_max = params_source.get('y_max', 25.0)
             y_max = st.number_input("Y-axis maximum:", 0.1, value=float(default_y_max))
 
+        cmap_choice, sort_regions, vmin, vmax = 'viridis', True, 0.0, 10.0 # Defaults
         if plot_type in ["Heatmap", "All"]:
             st.subheader("Heatmap Settings")
             default_cmap = params_source.get('cmap', 'viridis')
@@ -527,20 +537,22 @@ def main():
         if plot_type in ["Boxplot", "All"]:
              extend_bp = st.number_input("Boxplot signal window (±bp):", 50, 5000, 500, 50, disabled=st.session_state.analysis_running)
         max_regions = st.number_input("Max regions per BED:", 100, 10000, 5000, 100, disabled=st.session_state.analysis_running)
+    
 
-
-    ### CHANGE: This is the new, persistent display block.
-    # It will show results from either a fresh analysis or a loaded file.
+    # --- DISPLAY RESULTS BLOCK (now handles both loaded and new analysis) ---
     if st.session_state.analysis_results:
         st.markdown("---")
         st.header("📊 Analysis Results")
 
         if st.button("🗑️ Clear Results and Start New Analysis"):
+            # When clearing, we must clear all related state variables
             st.session_state.analysis_results = None
+            st.session_state.excel_uploader = None # This is allowed here, as it happens on the *next* run
             if 'replicate_groups' in st.session_state:
                 del st.session_state.replicate_groups
             st.rerun()
             
+        # The rest of the display logic is the same and now works perfectly
         results = st.session_state.analysis_results
         mode = "imported" if 'metadata' in results else "new_analysis"
         original_bed_names = results.get('bed_names_ordered')
@@ -560,6 +572,7 @@ def main():
                 f_data, f_name, f_mime = export_plot_with_format(fig, "boxplot", export_format)
                 st.download_button(f"📥 Download Boxplot ({export_format})", f_data, f_name, f_mime, key="dl_boxplot")
         
+        # ... (rest of the plotting and download buttons remain exactly the same) ...
         if plot_type in ["Line plot", "All"] and profile_data:
             st.subheader("📈 Line Plot Results")
             fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names)
@@ -578,12 +591,12 @@ def main():
         
         st.header("💾 Export Signal Data")
         analysis_params = results['analysis_params']
-        # Update params with current sidebar values for export
         analysis_params.update({'plot_type': plot_type, 'y_max': y_max, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax})
         excel_buffer = export_signal_data_to_excel(signals_data, profile_data, custom_bigwig_names, custom_bed_names, results['bigwig_file_names'], analysis_params)
         st.download_button("📊 Download All Results (Excel)", excel_buffer, f"signal_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_excel")
 
-    ### CHANGE: This section now only runs if there are no results stored
+
+    # --- NEW ANALYSIS BLOCK (only shows if no results are loaded) ---
     else:
         st.markdown("---"); st.header("🔬 New Analysis")
         
@@ -608,11 +621,11 @@ def main():
             st.session_state.analysis_running = True
             st.rerun()
 
-        # This block only executes on the rerun after the button is clicked
         if st.session_state.analysis_running:
             with st.spinner("Analysis in progress... This may take a moment."):
                 with tempfile.TemporaryDirectory() as temp_dir:
                     try:
+                        # ... (The entire analysis logic remains the same) ...
                         bigwig_paths = [save_uploaded_file(f, temp_dir) for f in bigwig_files]
                         bed_paths = {Path(f.name).stem: save_uploaded_file(f, temp_dir) for f in bed_files}
                         bed_names_ordered = [Path(f.name).stem for f in bed_files]
@@ -634,7 +647,7 @@ def main():
                                 status_text.text(f"Processing: {group_names[group_idx]} on {bed_name} ({current_task}/{total_tasks})")
                                 progress_bar.progress(progress)
 
-                                if plot_type in ["Boxplot", "All"] and extend_bp:
+                                if plot_type in ["Boxplot", "All"] and extend_bp is not None:
                                     signals_dict[bed_name] = extract_signals_fast(group_paths, bed_path, extend_bp, max_regions)
                                 if plot_type in ["Line plot", "Heatmap", "All"]:
                                     profile_dict[bed_name] = extract_signals_for_profile(group_paths, bed_path, 2000, max_regions, 20)
@@ -644,7 +657,6 @@ def main():
                         
                         status_text.text("✅ Analysis complete! Caching results..."); progress_bar.progress(1.0)
                         
-                        # Store everything in session state
                         analysis_params = {'plot_type': plot_type, 'y_max': y_max, 'extend_bp': extend_bp, 'max_regions': max_regions, 'line_extend': 2000, 'line_bin_size': 20, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax}
                         st.session_state.analysis_results = {
                             "signals_data": signals_data,
@@ -660,7 +672,7 @@ def main():
                         st.exception(e)
                     finally:
                         st.session_state.analysis_running = False
-                        st.rerun() # Rerun one last time to enter the display block
+                        st.rerun()
 
 if __name__ == "__main__":
     main()
