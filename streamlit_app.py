@@ -365,74 +365,89 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     return fig
 
-# --- UPDATED: COMPARISON HEATMAP FUNCTION WITH LAYOUT FIXES ---
+# --- REWRITTEN: CONSOLIDATED HEATMAP FUNCTION ---
 def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_bed_names=None,
                                cmap='viridis', sort_regions=True, vmin=0.0, vmax=10.0):
     """
-    Creates a dictionary of figures, one for each BED file,
-    comparing BigWig groups side-by-side with layout adjustments.
+    Creates ONE consolidated figure with a grid of comparison heatmaps.
+    Rows are BED files, Columns are BigWig files.
     """
     if not profile_data or not profile_data[0]:
-        return {}
+        return None
 
     name_mapping = dict(zip(bed_names, original_bed_names)) if original_bed_names else {n: n for n in bed_names}
-    figs = {}
     
-    for custom_bed_name in bed_names:
-        original_bed_name = name_mapping.get(custom_bed_name)
-        if not original_bed_name: continue
+    # Filter for BED files that have at least data for the reference sample (first BigWig)
+    valid_beds = [
+        (c, name_mapping[c]) for c in bed_names 
+        if name_mapping.get(c) in profile_data[0] and profile_data[0][name_mapping.get(c)]
+    ]
+    if not valid_beds:
+        return None
 
-        if not (original_bed_name in profile_data[0] and profile_data[0][original_bed_name]):
-            continue
+    # --- Create one large figure for all comparisons ---
+    nrows = len(valid_beds)
+    ncols = len(bigwig_names)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3.5 * nrows), sharex=True, squeeze=False)
 
+    im = None  # To hold the last image mappable for the colorbar
+
+    # --- Iterate through rows (BED files) and columns (BigWig files) ---
+    for row_idx, (custom_bed_name, original_bed_name) in enumerate(valid_beds):
+        
+        # Determine the sorting order from the reference sample (first BigWig) for this row
         ref_matrix = profile_data[0][original_bed_name]['all_profiles']
         if sort_regions and ref_matrix.shape[0] > 1:
-            mean_signal = ref_matrix.mean(axis=1)
-            sorted_indices = np.argsort(mean_signal)[::-1]
+            sorted_indices = np.argsort(ref_matrix.mean(axis=1))[::-1]
         else:
             sorted_indices = np.arange(ref_matrix.shape[0])
 
-        n_bws = len(bigwig_names)
-        # --- FIX: Reduced figure height for more compact plots ---
-        fig, axes = plt.subplots(1, n_bws, figsize=(4 * n_bws, 4), sharey=True, squeeze=False)
-        axes = axes.flatten()
+        for col_idx, bw_name in enumerate(bigwig_names):
+            ax = axes[row_idx, col_idx]
 
-        im = None
-        for i, (ax, bw_name) in enumerate(zip(axes, bigwig_names)):
-            if not (i < len(profile_data) and original_bed_name in profile_data[i] and profile_data[i][original_bed_name]):
-                ax.text(0.5, 0.5, "No Data", ha='center', va='center', fontsize=12)
-                ax.set_title(bw_name, fontweight='bold')
-                ax.set_xticks([])
+            # Set BigWig titles only on the top row
+            if row_idx == 0:
+                ax.set_title(bw_name, fontweight='bold', fontsize=12)
+
+            # Set BED file name as the Y-axis label on the first column
+            if col_idx == 0:
+                ax.set_ylabel(custom_bed_name, fontweight='bold', fontsize=12)
+            
+            # Plotting logic
+            if not (col_idx < len(profile_data) and original_bed_name in profile_data[col_idx] and profile_data[col_idx][original_bed_name]):
+                ax.text(0.5, 0.5, "No Data", ha='center', va='center')
+                ax.set_yticks([]) # Still remove ticks for empty plots
+            else:
+                p_data = profile_data[col_idx][original_bed_name]
+                matrix = p_data['all_profiles'][sorted_indices, :]
+                
+                im = ax.imshow(matrix, aspect='auto', interpolation='none', cmap=cmap, vmin=vmin, vmax=vmax)
+                
+                # Add n-count to the plot area for clarity
+                ax.text(0.02, 0.98, f"n={p_data['n_regions']}", transform=ax.transAxes, 
+                        ha='left', va='top', fontsize=9, bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.5))
+                
                 ax.set_yticks([])
-                continue
-            
-            p_data = profile_data[i][original_bed_name]
-            matrix = p_data['all_profiles'][sorted_indices, :]
 
-            im = ax.imshow(matrix, aspect='auto', interpolation='none', cmap=cmap, vmin=vmin, vmax=vmax)
-            ax.set_title(f"{bw_name}\n(n={p_data['n_regions']})", fontweight='bold')
-            
-            if i == 0:
-                ax.set_ylabel("Regions (Sorted by 1st Sample)")
-            ax.set_yticks([])
-            ax.set_xlabel("Distance from Center")
-            
-            positions = p_data['positions']
-            tick_pos = np.linspace(0, len(positions) - 1, 5)
-            tick_labels = [f'{int(positions[int(p)]/1000)}kb' if positions[int(p)] != 0 else '0' for p in tick_pos]
-            ax.set_xticks(tick_pos)
-            ax.set_xticklabels(tick_labels)
+            # Set X-axis labels and ticks only for the bottom row
+            if row_idx == nrows - 1:
+                positions = profile_data[0][original_bed_name]['positions']
+                tick_pos = np.linspace(0, len(positions) - 1, 5)
+                tick_labels = [f'{int(positions[int(p)]/1000)}kb' if positions[int(p)] != 0 else '0' for p in tick_pos]
+                ax.set_xticks(tick_pos)
+                ax.set_xticklabels(tick_labels, fontsize=10)
+                ax.set_xlabel("Distance from Center", fontsize=11)
+            else:
+                ax.set_xticklabels([])
 
-        if im:
-            cax = fig.add_axes([axes[-1].get_position().x1 + 0.01, axes[-1].get_position().y0, 0.02, axes[-1].get_position().height])
-            fig.colorbar(im, cax=cax, label="Signal Intensity")
+    # --- Add a single, shared colorbar for the entire figure ---
+    if im:
+        # Adjust subplot parameters to make room for the colorbar
+        fig.subplots_adjust(right=0.9)
+        cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7]) # [left, bottom, width, height]
+        fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
 
-        # --- FIX: Adjusted title position to prevent overlap ---
-        fig.suptitle(f"Heatmap Comparison for: {custom_bed_name}", fontsize=16, fontweight='bold', y=1.05)
-        plt.tight_layout(rect=[0, 0, 1, 0.98])
-        figs[custom_bed_name] = fig
-        
-    return figs
+    return fig
 
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
@@ -515,15 +530,14 @@ def main():
                 f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format)
                 st.download_button(f"📥 Download Line Plot ({export_format})", f_data, f_name, f_mime)
         
+        # --- MODIFIED: Calling the new consolidated heatmap function ---
         if plot_type in ["Heatmap", "All"] and profile_data:
-            st.subheader("🔥 Heatmap Comparison Results")
-            heatmap_figs = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names, cmap_choice, sort_regions, vmin, vmax)
-            for i, (bed_name, fig) in enumerate(heatmap_figs.items()):
-                st.markdown(f"#### Comparison for: `{bed_name}`")
+            st.subheader("🔥 Consolidated Heatmap Comparison")
+            fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names, cmap_choice, sort_regions, vmin, vmax)
+            if fig:
                 st.pyplot(fig)
-                safe_name = bed_name.replace(" ", "_").replace("/", "-")
-                f_data, f_name, f_mime = export_plot_with_format(fig, f"heatmap_{safe_name}", export_format)
-                st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key=f"dl_heatmap_imported_{i}")
+                f_data, f_name, f_mime = export_plot_with_format(fig, "consolidated_heatmap", export_format)
+                st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key=f"dl_heatmap_consolidated_imported")
         return
 
     st.markdown("---"); st.header("🔬 New Analysis")
@@ -597,15 +611,14 @@ def main():
                     fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names)
                     st.pyplot(fig); f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format); st.download_button(f"📥 Download Line Plot", f_data, f_name, f_mime)
                 
+                # --- MODIFIED: Calling the new consolidated heatmap function ---
                 if plot_type in ["Heatmap", "All"] and profile_data:
-                    st.subheader("🔥 Heatmap Comparison Results")
-                    heatmap_figs = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, None, cmap_choice, sort_regions, vmin, vmax)
-                    for i, (bed_name, fig) in enumerate(heatmap_figs.items()):
-                        st.markdown(f"#### Comparison for: `{bed_name}`")
+                    st.subheader("🔥 Consolidated Heatmap Comparison")
+                    fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, None, cmap_choice, sort_regions, vmin, vmax)
+                    if fig:
                         st.pyplot(fig)
-                        safe_name = bed_name.replace(" ", "_").replace("/", "-")
-                        f_data, f_name, f_mime = export_plot_with_format(fig, f"heatmap_{safe_name}", export_format)
-                        st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key=f"dl_heatmap_new_{i}")
+                        f_data, f_name, f_mime = export_plot_with_format(fig, "consolidated_heatmap", export_format)
+                        st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key=f"dl_heatmap_consolidated_new")
                 
                 st.header("💾 Export Signal Data")
                 analysis_params = {'plot_type': plot_type, 'y_max': y_max, 'extend_bp': extend_bp, 'max_regions': max_regions, 'line_extend': 2000, 'line_bin_size': 20, 'cmap': cmap_choice, 'sort_regions': sort_regions, 'vmin': vmin, 'vmax': vmax}
