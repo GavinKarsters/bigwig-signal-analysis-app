@@ -352,7 +352,7 @@ def create_single_boxplot(signals_dict, bigwig_names, bed_names_ordered, y_axis_
         sns.boxplot(data=df, x='Group', y='Signal', hue='BigWig', order=bed_names_ordered, hue_order=bigwig_names, palette='Set2', showfliers=False, ax=ax)
         ax.legend(title='BigWig Groups')
     else:
-        sns.boxplot(data=df, x='Group', y='Signal', order=bed_names_ordered, palette='Set2', showfliers=False, ax=ax)
+        sns.boxplot(data=df, x='Group', y='Signal', order=bed_names_ordered, hue='Group', hue_order=bed_names_ordered, palette='Set2', showfliers=False, ax=ax)
     ax.set_title('Signal Distribution at Peak Centers', fontsize=14, fontweight='bold')
     ax.set_xlabel('BED File Groups', fontsize=12); ax.set_ylabel('Mean Signal', fontsize=12)
     plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
