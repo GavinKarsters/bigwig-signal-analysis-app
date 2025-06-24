@@ -564,6 +564,7 @@ def main():
             col2.write("**BED Files:**")
             col2.json({i+1: name for i, name in enumerate(pre_extracted_data['bed_names_ordered'])})
 
+    # --- Start of Modified Sidebar Logic ---
     with st.sidebar:
         st.header("🔧 Plot Settings")
         
@@ -578,29 +579,50 @@ def main():
 
         plot_type = st.selectbox("Select plot type:", plot_type_options, index=default_index)
 
+        # Initialize UI variables to be used across sections
+        y_max = None
+        vmin, vmax = None, None
+        cmap_choice, sort_regions = None, None
+
         if plot_type in ["Boxplot", "All"]:
             st.subheader("Boxplot Settings")
-            default_y_max = pre_extracted_data['analysis_params']['y_max'] if pre_extracted_data else 25.0
-            y_max = st.number_input("Y-axis maximum:", 0.1, value=float(default_y_max))
+            default_y_max = 25.0
+            if pre_extracted_data and 'y_max' in pre_extracted_data['analysis_params']:
+                try:
+                    default_y_max = float(pre_extracted_data['analysis_params']['y_max'])
+                except (ValueError, TypeError):
+                    default_y_max = 25.0
+            y_max = st.number_input("Y-axis maximum:", 0.1, value=default_y_max)
 
         if plot_type in ["Heatmap", "All"]:
             st.subheader("Heatmap Settings")
+            
+            # --- THIS IS THE KEY CHANGE ---
+            # Set heatmap vmax default based on boxplot y_max if available
+            default_vmax = y_max if y_max is not None else 10.0
+            default_vmin = 0.0
+            default_cmap, default_sort = 'Reds', True
+
             if pre_extracted_data:
                 params = pre_extracted_data['analysis_params']
-                default_cmap, default_sort = params.get('cmap', 'viridis'), params.get('sort_regions', True)
-                default_vmin, default_vmax = params.get('vmin', 0.0), params.get('vmax', 10.0)
-            else:
-                default_cmap, default_sort, default_vmin, default_vmax = 'Reds', True, 0.0, 10.0
+                default_cmap = params.get('cmap', default_cmap)
+                default_sort = bool(params.get('sort_regions', default_sort))
+                default_vmin = float(params.get('vmin', default_vmin))
+                # Prioritize vmax from file. If not present, use the linked y_max (or fallback).
+                default_vmax = float(params.get('vmax', default_vmax))
             
             cmap_options = ['Reds','viridis', 'coolwarm', 'RdBu', 'Blues', 'YlGnBu', 'magma']
             cmap_index = cmap_options.index(default_cmap) if default_cmap in cmap_options else 0
             cmap_choice = st.selectbox("Colormap:", cmap_options, index=cmap_index)
-            sort_regions = st.checkbox("Sort regions by mean signal (using 1st sample as reference)", value=bool(default_sort))
-            vmin = st.number_input("Color scale min:", value=float(default_vmin), format="%.2f")
-            vmax = st.number_input("Color scale max:", value=float(default_vmax), format="%.2f")
-
+            sort_regions = st.checkbox("Sort regions by mean signal (using 1st sample as reference)", value=default_sort)
+            
+            vmin = st.number_input("Color scale min:", value=default_vmin, format="%.2f")
+            # The 'value' is now dynamically set based on the y_max from the boxplot section
+            vmax = st.number_input("Color scale max:", value=default_vmax, format="%.2f")
+        
         st.subheader("Export Settings")
         export_format = st.selectbox("Export format:", ["PNG", "PDF"])
+    # --- End of Modified Sidebar Logic ---
 
     if pre_extracted_data:
         st.markdown("---"); st.header("🎨 Plot Generation from Pre-Extracted Data")
