@@ -8,3 +8,4 @@ pathlib
 openpyxl
 pydeseq2
 anndata
+pysam
