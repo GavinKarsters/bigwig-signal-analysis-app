@@ -18,10 +18,11 @@ from matplotlib.gridspec import GridSpec
 import anndata
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.ds import DeseqStats
+import pysam # <-- New dependency for reading BAM files
 
 # Set page config
 st.set_page_config(
-    page_title="BigWig Analysis Suite",
+    page_title="BigWig & BAM Analysis Suite",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -336,42 +337,45 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     plt.tight_layout(rect=[0, 0, 1, 1], pad=0.5)
     return fig
 
-# --- New Functions for Differential Analysis ---
+# --- New/Modified Functions for Differential Analysis ---
 
 @st.cache_data(show_spinner=False)
-def create_counts_matrix(_bw_paths, _bed_path, _bed_name, max_regions=10000):
+def create_counts_matrix_from_bam(_bam_paths, _bed_path, _bed_name, max_regions=10000):
     """
-    Generates a counts matrix from BigWig files for regions in a BED file.
-    The "count" is the sum of the signal in the region, rounded to the nearest integer.
+    Generates a read counts matrix from BAM files for regions in a BED file.
+    This uses `pysam` to count reads falling within each BED interval.
     """
     try:
         bed_df = pd.read_csv(_bed_path, sep='\t', header=None, usecols=[0, 1, 2], names=['chr', 'start', 'end'], dtype={'chr': str, 'start': int, 'end': int})
         if len(bed_df) > max_regions:
             bed_df = bed_df.sample(n=max_regions, random_state=42)
+        # Create a unique ID for each genomic region
         bed_df.index = bed_df.apply(lambda r: f"{r['chr']}_{r['start']}_{r['end']}", axis=1)
     except Exception as e:
         st.error(f"Error reading BED file {_bed_name}: {e}")
         return None, None
 
-    sample_names = [Path(p).stem for p in _bw_paths]
+    sample_names = [Path(p).stem for p in _bam_paths]
     counts_matrix = pd.DataFrame(index=bed_df.index, columns=sample_names, dtype=np.int32)
     
-    for bw_path in _bw_paths:
-        sample_name = Path(bw_path).stem
+    for bam_path in _bam_paths:
+        sample_name = Path(bam_path).stem
         try:
-            bw = pyBigWig.open(bw_path)
-            for region_id, row in bed_df.iterrows():
-                # Use bw.stats with type='sum' to get integrated signal
-                signal_sum = bw.stats(row['chr'], row['start'], row['end'], type='sum')
-                # signal_sum can return a list with one value or None
-                count = round(signal_sum[0]) if signal_sum and signal_sum[0] is not None else 0
-                counts_matrix.loc[region_id, sample_name] = count
-            bw.close()
-        except Exception as e:
-            st.warning(f"Could not process {Path(bw_path).name} for {region_id}. Error: {e}. Setting counts to 0.")
+            # Pysam requires an index file. The main app function creates it.
+            samfile = pysam.AlignmentFile(bam_path, "rb")
+            # Get counts for each region
+            counts = [samfile.count(row.chr, row.start, row.end) for _, row in bed_df.iterrows()]
+            counts_matrix[sample_name] = counts
+            samfile.close()
+        except ValueError as e:
+            # This often happens if a chromosome in the BED is not in the BAM header
+            st.warning(f"Could not process {Path(bam_path).name} for some regions in {_bed_name}. Error: {e}. Setting counts to 0 for this file.")
             counts_matrix[sample_name] = 0
-            if 'bw' in locals() and bw:
-                bw.close()
+            if 'samfile' in locals() and not samfile.closed:
+                samfile.close()
+        except Exception as e:
+            st.error(f"An error occurred while processing BAM file {Path(bam_path).name}: {e}")
+            return None, None
 
     return counts_matrix, bed_df.reset_index(drop=True)
 
@@ -381,28 +385,13 @@ def run_deseq_analysis(_counts_df, _metadata_df):
     Runs pyDESeq2 analysis on a counts matrix and metadata.
     """
     try:
-        # Create AnnData object
         adata = anndata.AnnData(X=_counts_df.astype(int), var=_metadata_df)
-        adata.obs_names = _counts_df.index
-        adata.var_names = _metadata_df.index
-        
-        # Build DDS object
-        dds = DeseqDataSet(
-            adata=adata,
-            design_factors='condition',
-            ref_level=['condition', 'Group1'],  # Explicitly set reference
-            quiet=True
-        )
-        
-        # Run analysis
+        adata.obs_names, adata.var_names = _counts_df.index, _metadata_df.index
+        dds = DeseqDataSet(adata=adata, design_factors='condition', ref_level=['condition', 'Group1'], quiet=True)
         dds.deseq2()
-        
-        # Get results
         stat_res = DeseqStats(dds, quiet=True)
         stat_res.summary()
-        results_df = stat_res.results_df
-        return results_df
-
+        return stat_res.results_df
     except Exception as e:
         st.error(f"An error occurred during DESeq2 analysis: {e}")
         return None
@@ -410,45 +399,25 @@ def run_deseq_analysis(_counts_df, _metadata_df):
 def create_volcano_plot(df, l2fc_col, padj_col, l2fc_cutoff, padj_cutoff, group1_name, group2_name):
     """Generates a volcano plot from differential analysis results."""
     fig, ax = plt.subplots(figsize=(8, 7))
-
-    # Add significance column
     df['significant'] = (df[padj_col] < padj_cutoff) & (abs(df[l2fc_col]) > l2fc_cutoff)
     df['direction'] = 'Not Significant'
-    df.loc[(df['significant']) & (df[l2fc_col] > l2fc_cutoff), 'direction'] = f'Upregulated in {group2_name}'
-    df.loc[(df['significant']) & (df[l2fc_col] < -l2fc_cutoff), 'direction'] = f'Upregulated in {group1_name}'
-
-    # Plot
-    colors = {'Not Significant': 'grey', f'Upregulated in {group2_name}': 'red', f'Upregulated in {group1_name}': 'blue'}
-    sns.scatterplot(
-        data=df,
-        x=l2fc_col,
-        y=-np.log10(df[padj_col].replace(0, np.nan).fillna(1e-300)), # Replace 0s for log
-        hue='direction',
-        palette=colors,
-        alpha=0.6,
-        edgecolor=None,
-        ax=ax
-    )
-
-    # Cutoff lines
-    ax.axvline(x=l2fc_cutoff, linestyle='--', color='grey')
-    ax.axvline(x=-l2fc_cutoff, linestyle='--', color='grey')
+    df.loc[(df['significant']) & (df[l2fc_col] > l2fc_cutoff), 'direction'] = f'Up in {group2_name}'
+    df.loc[(df['significant']) & (df[l2fc_col] < -l2fc_cutoff), 'direction'] = f'Up in {group1_name}'
+    colors = {'Not Significant': 'grey', f'Up in {group2_name}': 'red', f'Up in {group1_name}': 'blue'}
+    sns.scatterplot(data=df, x=l2fc_col, y=-np.log10(df[padj_col].replace(0, 1e-300)), hue='direction', palette=colors, alpha=0.6, edgecolor=None, ax=ax)
+    ax.axvline(x=l2fc_cutoff, linestyle='--', color='grey'); ax.axvline(x=-l2fc_cutoff, linestyle='--', color='grey')
     ax.axhline(y=-np.log10(padj_cutoff), linestyle='--', color='grey')
-    
-    # Labels and Title
-    ax.set_xlabel("Log2 Fold Change", fontsize=12)
-    ax.set_ylabel("-log10(Adjusted p-value)", fontsize=12)
+    ax.set_xlabel("Log2 Fold Change", fontsize=12); ax.set_ylabel("-log10(Adjusted p-value)", fontsize=12)
     ax.set_title("Volcano Plot", fontsize=14, fontweight='bold')
     ax.legend(title='Significance', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
-
     return fig
 
 def differential_analysis_tab():
-    """Content for the Differential Analysis Tab."""
-    st.header("🔬 Differential Signal Analysis")
-    st.markdown("Compare signal between two groups of BigWig files across genomic regions defined in BED files. This tool uses `pyDESeq2` to find statistically significant differences.")
-    st.info("⚠️ **Note:** This method uses the sum of signal in a region as a 'pseudo-count' for DESeq2 analysis. This is an approximation of a standard ChIP-seq differential binding analysis, which would typically use raw read counts from BAM files.")
+    """Content for the Differential Analysis Tab, now using BAM files."""
+    st.header("🔬 Differential Signal Analysis (BAM -> DESeq2)")
+    st.markdown("Compare read counts between two groups of **BAM files** across genomic regions defined in BED files. This tool uses `pysam` to count reads and `pyDESeq2` to find statistically significant differences.")
+    st.info("✅ **Correctness:** This is the standard approach for differential binding/accessibility analysis. Raw read counts from BAM files are used as input for DESeq2.")
 
     if 'diff_analysis_results' not in st.session_state:
         st.session_state.diff_analysis_results = None
@@ -463,11 +432,12 @@ def differential_analysis_tab():
 
     # --- File Upload and Grouping ---
     st.subheader("1. Upload Files and Define Groups")
-    all_bw_files = st.file_uploader(
-        "Upload all BigWig files (.bw, .bigwig)",
-        type=['bw', 'bigwig'],
+    all_bam_files = st.file_uploader(
+        "Upload all BAM files (.bam)",
+        type=['bam'],
         accept_multiple_files=True,
-        key="diff_bw_uploader",
+        key="diff_bam_uploader",
+        help="Upload your sorted BAM files. The corresponding index (.bai) files will be generated automatically.",
         disabled=st.session_state.diff_analysis_running
     )
     
@@ -475,187 +445,111 @@ def differential_analysis_tab():
     group1_files, group2_files = [], []
     group1_name, group2_name = "Group1", "Group2"
 
-    if all_bw_files:
-        file_dict = {f.name: f for f in all_bw_files}
+    if all_bam_files:
+        file_dict = {f.name: f for f in all_bam_files}
         file_names = list(file_dict.keys())
-        
         with col1:
             group1_name = st.text_input("Name for Group 1 (Reference)", "Control")
             group1_selection = st.multiselect(f"Select files for {group1_name}:", file_names, key="g1_select", disabled=st.session_state.diff_analysis_running)
             group1_files = [file_dict[name] for name in group1_selection]
-
         with col2:
             group2_name = st.text_input("Name for Group 2 (Comparison)", "Treatment")
             remaining_files = [f for f in file_names if f not in group1_selection]
             group2_selection = st.multiselect(f"Select files for {group2_name}:", remaining_files, default=remaining_files, key="g2_select", disabled=st.session_state.diff_analysis_running)
             group2_files = [file_dict[name] for name in group2_selection]
 
-    bed_files_diff = st.file_uploader(
-        "Upload BED files for analysis",
-        type=['bed'],
-        accept_multiple_files=True,
-        key="diff_bed_uploader",
-        disabled=st.session_state.diff_analysis_running
-    )
+    bed_files_diff = st.file_uploader("Upload BED files for analysis", type=['bed'], accept_multiple_files=True, key="diff_bed_uploader", disabled=st.session_state.diff_analysis_running)
 
     # --- Run Analysis ---
     st.subheader("2. Run Analysis")
-    can_run = all_bw_files and bed_files_diff and group1_files and group2_files
+    can_run = all_bam_files and bed_files_diff and group1_files and group2_files
     if st.button("🚀 Run Differential Analysis", type="primary", use_container_width=True, disabled=not can_run or st.session_state.diff_analysis_running):
         st.session_state.diff_analysis_running = True
-        st.session_state.diff_analysis_results = None # Clear previous results
+        st.session_state.diff_analysis_results = None
 
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                # Save all files
-                g1_paths = [save_uploaded_file(f, temp_dir) for f in group1_files]
-                g2_paths = [save_uploaded_file(f, temp_dir) for f in group2_files]
-                all_paths = g1_paths + g2_paths
+                status_text = st.empty()
+                status_text.info("Saving BAM files and generating indexes... This may take a while for large files.")
                 
-                bed_paths = {Path(f.name).stem: save_uploaded_file(f, temp_dir) for f in bed_files_diff}
+                # --- Save BAMs and create BAI index for each ---
+                g1_paths = [save_uploaded_file(f, temp_dir) for f in group1_files]
+                for p in g1_paths: pysam.index(p)
+                
+                g2_paths = [save_uploaded_file(f, temp_dir) for f in group2_files]
+                for p in g2_paths: pysam.index(p)
 
-                # Create metadata
-                metadata = pd.DataFrame({
-                    'condition': ['Group1'] * len(g1_paths) + ['Group2'] * len(g2_paths)
-                }, index=[Path(p).stem for p in all_paths])
+                all_paths = g1_paths + g2_paths
+                bed_paths = {Path(f.name).stem: save_uploaded_file(f, temp_dir) for f in bed_files_diff}
+                metadata = pd.DataFrame({'condition': ['Group1'] * len(g1_paths) + ['Group2'] * len(g2_paths)}, index=[Path(p).stem for p in all_paths])
 
                 results_store = {}
                 progress_bar = st.progress(0)
-                status_text = st.empty()
-                
                 total_beds = len(bed_paths)
                 for i, (bed_name, bed_path) in enumerate(bed_paths.items()):
                     status_text.text(f"Processing BED file: {bed_name} ({i+1}/{total_beds})...")
                     
-                    # Step 1: Create counts matrix
-                    status_text.text(f"[{i+1}/{total_beds}] Creating counts matrix for {bed_name}...")
-                    counts_df, bed_coords_df = create_counts_matrix(all_paths, bed_path, bed_name, max_regions_diff)
-                    if counts_df is None:
-                        st.error(f"Failed to create counts matrix for {bed_name}. Skipping.")
-                        continue
+                    status_text.text(f"[{i+1}/{total_beds}] Counting reads in BAMs for {bed_name}...")
+                    counts_df, bed_coords_df = create_counts_matrix_from_bam(all_paths, bed_path, bed_name, max_regions_diff)
+                    if counts_df is None: continue
 
-                    # Step 2: Run DESeq2
                     status_text.text(f"[{i+1}/{total_beds}] Running DESeq2 on {bed_name}...")
                     deseq_results = run_deseq_analysis(counts_df, metadata)
-                    if deseq_results is None:
-                        st.error(f"DESeq2 analysis failed for {bed_name}. Skipping.")
-                        continue
+                    if deseq_results is None: continue
 
-                    # Step 3: Combine results
                     final_df = bed_coords_df.join(deseq_results)
                     results_store[bed_name] = final_df.reset_index(drop=True)
-                    
                     progress_bar.progress((i + 1) / total_beds)
 
                 status_text.success("✅ Differential analysis complete!")
-                
-                st.session_state.diff_analysis_results = {
-                    "results": results_store,
-                    "group1_name": group1_name,
-                    "group2_name": group2_name,
-                    "bed_names": list(bed_paths.keys())
-                }
-
+                st.session_state.diff_analysis_results = {"results": results_store, "group1_name": group1_name, "group2_name": group2_name, "bed_names": list(bed_paths.keys())}
             except Exception as e:
-                st.error(f"A critical error occurred: {e}")
-                st.exception(e)
+                st.error(f"A critical error occurred: {e}"); st.exception(e)
             finally:
-                st.session_state.diff_analysis_running = False
-                st.rerun()
+                st.session_state.diff_analysis_running = False; st.rerun()
 
     # --- Display Results ---
     if st.session_state.diff_analysis_results:
-        st.markdown("---")
-        st.header("📊 Results")
-        
+        st.markdown("---"); st.header("📊 Results")
         results_data = st.session_state.diff_analysis_results
         selected_bed = st.selectbox("Select BED file to view results:", results_data["bed_names"])
-        
         if selected_bed and selected_bed in results_data["results"]:
             res_df = results_data["results"][selected_bed].copy()
-            g1_name = results_data["group1_name"]
-            g2_name = results_data["group2_name"]
-            
-            # Filter based on sliders
-            significant_df = res_df[
-                (res_df['padj'] < st.session_state.fdr_cutoff) &
-                (abs(res_df['log2FoldChange']) > st.session_state.l2fc_cutoff)
-            ]
-            
-            up_count = significant_df[significant_df['log2FoldChange'] > 0].shape[0]
-            down_count = significant_df[significant_df['log2FoldChange'] < 0].shape[0]
-
+            g1_name, g2_name = results_data["group1_name"], results_data["group2_name"]
+            significant_df = res_df[(res_df['padj'] < st.session_state.fdr_cutoff) & (abs(res_df['log2FoldChange']) > st.session_state.l2fc_cutoff)]
+            up_count, down_count = significant_df[significant_df['log2FoldChange'] > 0].shape[0], significant_df[significant_df['log2FoldChange'] < 0].shape[0]
             st.metric(f"Significant Regions (Up in {g2_name})", up_count)
             st.metric(f"Significant Regions (Up in {g1_name})", down_count)
-
-            # --- Volcano Plot ---
             st.subheader("Volcano Plot")
             with st.spinner("Generating volcano plot..."):
-                volcano_fig = create_volcano_plot(
-                    res_df, 'log2FoldChange', 'padj', 
-                    st.session_state.l2fc_cutoff, st.session_state.fdr_cutoff,
-                    g1_name, g2_name
-                )
+                volcano_fig = create_volcano_plot(res_df, 'log2FoldChange', 'padj', st.session_state.l2fc_cutoff, st.session_state.fdr_cutoff, g1_name, g2_name)
                 st.pyplot(volcano_fig)
-                
-                # Download plot
                 png_data, png_name, _ = export_plot_with_format(volcano_fig, f"volcano_{selected_bed}", "PNG")
                 st.download_button("📥 Download Volcano Plot (PNG)", png_data, png_name, "image/png")
-
-            # --- Data Table and Export ---
             st.subheader("Results Table")
             st.write(f"Showing {significant_df.shape[0]} significant regions out of {res_df.shape[0]} total.")
-            
-            st.dataframe(significant_df.style.format({
-                'log2FoldChange': '{:.2f}', 'pvalue': '{:.2e}', 'padj': '{:.2e}', 'baseMean': '{:.2f}'
-            }))
-
-            # Export buttons
-            st.write("**Export Data**")
-            col1, col2 = st.columns(2)
-            
-            @st.cache_data
-            def to_csv(df):
-                return df.to_csv(index=False).encode('utf-8')
-
-            full_csv = to_csv(res_df)
-            sig_csv = to_csv(significant_df)
-
-            col1.download_button(
-                label="📥 Download ALL Results (CSV)",
-                data=full_csv,
-                file_name=f"all_results_{selected_bed}.csv",
-                mime="text/csv",
-            )
-            col2.download_button(
-                label="📥 Download SIGNIFICANT Results (CSV)",
-                data=sig_csv,
-                file_name=f"significant_results_{selected_bed}_fdr{st.session_state.fdr_cutoff}_l2fc{st.session_state.l2fc_cutoff}.csv",
-                mime="text/csv",
-            )
+            st.dataframe(significant_df.style.format({'log2FoldChange': '{:.2f}', 'pvalue': '{:.2e}', 'padj': '{:.2e}', 'baseMean': '{:.2f}'}))
+            st.write("**Export Data**"); col1, col2 = st.columns(2)
+            def to_csv(df): return df.to_csv(index=False).encode('utf-8')
+            col1.download_button(label="📥 Download ALL Results (CSV)", data=to_csv(res_df), file_name=f"all_results_{selected_bed}.csv", mime="text/csv")
+            col2.download_button(label="📥 Download SIGNIFICANT Results (CSV)", data=to_csv(significant_df), file_name=f"significant_results_{selected_bed}_fdr{st.session_state.fdr_cutoff}_l2fc{st.session_state.l2fc_cutoff}.csv", mime="text/csv")
 
 def signal_analysis_tab():
     """Content for the original Signal Analysis tab."""
-    st.header("📊 BigWig Signal Analysis Tool")
-    st.markdown("Upload BigWig/BED files or a pre-extracted Excel file to generate plots.")
-
-    if 'analysis_results' not in st.session_state:
-        st.session_state.analysis_results = None
-    if 'analysis_running' not in st.session_state:
-        st.session_state.analysis_running = False
-
+    st.header("📊 BigWig Signal Profile Analysis")
+    st.markdown("Upload BigWig/BED files or a pre-extracted Excel file to generate profile plots and heatmaps.")
+    if 'analysis_results' not in st.session_state: st.session_state.analysis_results = None
+    if 'analysis_running' not in st.session_state: st.session_state.analysis_running = False
     st.subheader("🔄 Import Pre-Extracted Signal Data (Optional)")
     uploaded_excel = st.file_uploader("Choose an exported signal data file (.xlsx):", type=['xlsx'], key="excel_uploader")
     pre_extracted_data = load_signal_data_from_excel(uploaded_excel) if uploaded_excel else None
-    
     if pre_extracted_data:
         st.success("✅ Successfully loaded pre-extracted data!")
         col1, col2 = st.columns(2)
         col1.write("**BigWig Groups:**"); col1.json({i+1: name for i, name in enumerate(pre_extracted_data['group_names'])})
         col2.write("**BED Files:**"); col2.json({i+1: name for i, name in enumerate(pre_extracted_data['bed_names_ordered'])})
-
     with st.sidebar:
-        st.header("🔧 Plot Settings")
+        st.header("🔧 Signal Plot Settings")
         plot_type_options = ["Boxplot", "Line plot", "Heatmap", "All"]
         default_index = 3
         if pre_extracted_data:
@@ -678,7 +572,6 @@ def signal_analysis_tab():
             vmax = st.number_input("Color scale max:", value=float(params.get('vmax', 10.0)), format="%.2f")
         st.subheader("Export Settings")
         export_format = st.selectbox("Export format:", ["PNG", "PDF"])
-
     if pre_extracted_data:
         st.markdown("---"); st.header("🎨 Plots from Pre-Extracted Data")
         custom_bigwig_names, custom_bed_names = setup_custom_names(pre_extracted_data['group_names'], pre_extracted_data['bed_names_ordered'], mode="imported")
@@ -705,8 +598,7 @@ def signal_analysis_tab():
                 f_data, f_name, f_mime = export_plot_with_format(fig, "consolidated_heatmap", export_format)
                 st.download_button(f"📥 Download Heatmap ({export_format})", f_data, f_name, f_mime, key=f"dl_heatmap_consolidated_imported")
         return
-
-    st.markdown("---"); st.header("🔬 New Analysis")
+    st.markdown("---"); st.header("🔬 New Signal Profile Analysis")
     with st.sidebar:
         st.header("⚙️ Signal Analysis Parameters")
         extend_bp = None
@@ -726,7 +618,7 @@ def signal_analysis_tab():
     if bigwig_files or bed_files:
         if st.session_state.analysis_results and (([f.name for f in bigwig_files] if bigwig_files else []) != st.session_state.analysis_results.get('bigwig_file_names', []) or ([f.name for f in bed_files] if bed_files else []) != st.session_state.analysis_results.get('bed_file_names', [])):
             st.session_state.analysis_results = None
-    if st.button("🚀 Run Signal Analysis", type="primary", use_container_width=True, disabled=not bigwig_files or not bed_files or st.session_state.analysis_running):
+    if st.button("🚀 Run Signal Profile Analysis", type="primary", use_container_width=True, disabled=not bigwig_files or not bed_files or st.session_state.analysis_running):
         st.session_state.analysis_running = True
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
@@ -785,9 +677,9 @@ def signal_analysis_tab():
         st.download_button("📊 Download Signal Data (Excel)", excel_buffer, f"signal_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_excel_new")
 
 def main():
-    st.title("BigWig Analysis Suite")
+    st.title("Genomic Data Analysis Suite")
 
-    tab1, tab2 = st.tabs(["Signal Profile Analysis", "Differential Signal Analysis"])
+    tab1, tab2 = st.tabs(["Signal Profile Analysis (BigWig)", "Differential Analysis (BAM)"])
 
     with tab1:
         signal_analysis_tab()
