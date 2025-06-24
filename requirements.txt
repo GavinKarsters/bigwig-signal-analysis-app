@@ -6,6 +6,3 @@ seaborn>=0.11.0
 pyBigWig>=0.3.18
 pathlib
 openpyxl
-pydeseq2
-anndata
-pysam
