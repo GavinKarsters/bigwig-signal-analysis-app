@@ -113,7 +113,7 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
                 analysis_params.get('y_max', 'Unknown'), analysis_params.get('extend_bp', 'Unknown'),
                 analysis_params.get('max_regions', 'Unknown'), analysis_params.get('line_extend', 2000),
                 analysis_params.get('line_bin_size', 20),
-                analysis_params.get('cmap', 'viridis'), analysis_params.get('sort_regions', True),
+                analysis_params.get('cmap', 'Reds'), analysis_params.get('sort_regions', True),
                 analysis_params.get('vmin', 0.0), analysis_params.get('vmax', 10.0)
             ]
         }
@@ -179,7 +179,7 @@ def load_signal_data_from_excel(uploaded_file):
             'max_regions': int(metadata_dict.get('Max Regions per BED', 5000)),
             'line_extend': int(metadata_dict.get('Line Plot Extend (bp)', 2000)),
             'line_bin_size': int(metadata_dict.get('Line Plot Bin Size (bp)', 20)),
-            'cmap': metadata_dict.get('Heatmap Colormap', 'viridis'),
+            'cmap': metadata_dict.get('Heatmap Colormap', 'Reds'),
             'sort_regions': bool(metadata_dict.get('Heatmap Sort Regions', True)),
             'vmin': float(metadata_dict.get('Heatmap Color Min', 0.0)),
             'vmax': float(metadata_dict.get('Heatmap Color Max', 10.0))
@@ -429,7 +429,7 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     return fig
 
 def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_bed_names=None,
-                               cmap='viridis', sort_regions=True, vmin=0.0, vmax=10.0):
+                               cmap='Reds', sort_regions=True, vmin=0.0, vmax=10.0):
     if not profile_data or not profile_data[0]:
         return None
 
@@ -590,7 +590,7 @@ def main():
                 default_cmap, default_sort = params.get('cmap', 'viridis'), params.get('sort_regions', True)
                 default_vmin, default_vmax = params.get('vmin', 0.0), params.get('vmax', 10.0)
             else:
-                default_cmap, default_sort, default_vmin, default_vmax = 'viridis', True, 0.0, 10.0
+                default_cmap, default_sort, default_vmin, default_vmax = 'Reds', True, 0.0, 10.0
             
             cmap_options = ['Reds','viridis', 'coolwarm', 'RdBu', 'Blues', 'YlGnBu', 'magma']
             cmap_index = cmap_options.index(default_cmap) if default_cmap in cmap_options else 0
