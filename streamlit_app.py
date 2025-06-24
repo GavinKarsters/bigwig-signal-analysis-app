@@ -447,45 +447,44 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     nrows = len(valid_beds)
     ncols = len(bigwig_names)
     
-    # Smart figure sizing for heatmaps
+    # Much more conservative figure sizing for single BigWig
     if ncols == 1:
-        # Single BigWig - make it narrower and taller
         if nrows == 1:
-            # Single heatmap
-            fig_width, fig_height = 5, 5
+            # Single heatmap - make it compact
+            fig_width, fig_height = 6, 4
         else:
-            # Multiple BED files, single BigWig - stack vertically
+            # Multiple BED files, single BigWig - much more compact vertically
             fig_width = 6
-            fig_height = min(4 * nrows, 16)  # Max height of 16
+            fig_height = min(2.5 * nrows + 1, 12)  # Much smaller per row
     elif nrows == 1:
-        # Single BED file, multiple BigWigs - arrange horizontally but limit width
-        fig_width = min(6 * ncols, 18)  # More reasonable width per column
-        fig_height = 6
+        # Single BED file, multiple BigWigs
+        fig_width = min(4 * ncols + 1, 16)
+        fig_height = 5
     else:
         # Multiple rows and columns
-        fig_width = min(5 * ncols + 1, 20)  # Slightly wider per column
-        fig_height = min(3.5 * nrows, 18)
+        fig_width = min(4 * ncols + 1, 18)
+        fig_height = min(3 * nrows + 1, 15)
     
     fig = plt.figure(figsize=(fig_width, fig_height))
     
-    # Adjust grid spacing and ratios based on layout
+    # Much tighter grid spacing for single column
     if ncols == 1:
         if nrows == 1:
-            # Single heatmap - make it more square
-            gs = GridSpec(1, 2, width_ratios=[3, 0.3], 
-                         wspace=0.15, hspace=0.3)
+            # Single heatmap - tight layout
+            gs = GridSpec(1, 2, width_ratios=[4, 0.4], 
+                         wspace=0.1, hspace=0.2)
         else:
-            # Multiple rows, single column
-            gs = GridSpec(nrows, 2, width_ratios=[4, 0.3], 
-                         wspace=0.1, hspace=0.3)
+            # Multiple rows, single column - very tight spacing
+            gs = GridSpec(nrows, 2, width_ratios=[4, 0.4], 
+                         wspace=0.05, hspace=0.15)  # Much tighter spacing
     elif nrows == 1:
-        # Single row - adjust spacing between columns
-        gs = GridSpec(1, ncols + 1, width_ratios=[5] * ncols + [0.3], 
-                     wspace=0.2, hspace=0.3)
+        # Single row
+        gs = GridSpec(1, ncols + 1, width_ratios=[4] * ncols + [0.3], 
+                     wspace=0.15, hspace=0.3)
     else:
         # Multiple rows and columns
         gs = GridSpec(nrows, ncols + 1, width_ratios=[4] * ncols + [0.2], 
-                     wspace=0.15, hspace=0.4)
+                     wspace=0.15, hspace=0.3)
 
     im = None 
 
@@ -499,15 +498,23 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         for col_idx, bw_name in enumerate(bigwig_names):
             ax = fig.add_subplot(gs[row_idx, col_idx])
 
-            # Adjust title font size based on layout
-            title_fontsize = 14 if ncols == 1 else (12 if ncols <= 2 else 10)
+            # Smaller fonts for single column to prevent overlap
+            if ncols == 1:
+                title_fontsize = 11 if nrows == 1 else 10
+                ylabel_fontsize = 9 if nrows > 2 else 10  # Much smaller for multiple rows
+            else:
+                title_fontsize = 12 if ncols <= 2 else 10
+                ylabel_fontsize = 12 if nrows <= 3 else 10
+            
             if row_idx == 0:
                 ax.set_title(bw_name, fontweight='bold', fontsize=title_fontsize)
 
-            # Adjust ylabel font size and positioning
-            ylabel_fontsize = 14 if ncols == 1 else (12 if nrows <= 3 else 10)
             if col_idx == 0:
-                ax.set_ylabel(custom_bed_name, fontweight='bold', fontsize=ylabel_fontsize)
+                # Truncate long BED names and use smaller font
+                display_name = custom_bed_name
+                if len(display_name) > 15:  # Truncate long names
+                    display_name = display_name[:12] + "..."
+                ax.set_ylabel(display_name, fontweight='bold', fontsize=ylabel_fontsize)
             
             if not (col_idx < len(profile_data) and original_bed_name in profile_data[col_idx] and profile_data[col_idx][original_bed_name]):
                 ax.text(0.5, 0.5, "No Data", ha='center', va='center')
@@ -517,20 +524,15 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 p_data = profile_data[col_idx][original_bed_name]
                 matrix = p_data['all_profiles'][sorted_indices, :]
                 
-                # For single heatmap, you might want to control the aspect ratio more directly
-                if ncols == 1 and nrows == 1:
-                    im = ax.imshow(matrix, aspect='auto', interpolation='none', 
-                                  cmap=cmap, vmin=vmin, vmax=vmax)
-                else:
-                    im = ax.imshow(matrix, aspect='auto', interpolation='none', 
-                                  cmap=cmap, vmin=vmin, vmax=vmax)
+                im = ax.imshow(matrix, aspect='auto', interpolation='none', 
+                              cmap=cmap, vmin=vmin, vmax=vmax)
                 
-                # Adjust annotation font size
-                annotation_fontsize = 10 if ncols == 1 else (9 if ncols <= 2 else 8)
+                # Smaller annotation for single column
+                annotation_fontsize = 8 if ncols == 1 else (9 if ncols <= 2 else 8)
                 ax.text(0.02, 0.98, f"n={p_data['n_regions']}", 
                        transform=ax.transAxes, ha='left', va='top', 
                        fontsize=annotation_fontsize, 
-                       bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
+                       bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.8))
                 ax.set_yticks([])
 
             if row_idx == nrows - 1:
@@ -539,21 +541,27 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 tick_labels = [f'{int(positions[int(p)]/1000)}kb' if positions[int(p)] != 0 else '0' for p in tick_pos]
                 ax.set_xticks(tick_pos)
                 
-                # Adjust tick label font size
-                tick_fontsize = 11 if ncols == 1 else (10 if ncols <= 2 else 9)
+                # Smaller tick labels for single column
+                tick_fontsize = 9 if ncols == 1 else (10 if ncols <= 2 else 9)
                 ax.set_xticklabels(tick_labels, fontsize=tick_fontsize)
-                xlabel_fontsize = 12 if ncols == 1 else 11
+                xlabel_fontsize = 10 if ncols == 1 else 11
                 ax.set_xlabel("Distance from Center", fontsize=xlabel_fontsize)
             else:
                 ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
 
-    # Add colorbar with appropriate positioning
+    # Add colorbar
     if im:
         cbar_ax = fig.add_subplot(gs[:, -1])
         cbar = fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
-        # Adjust colorbar label font size
-        cbar_fontsize = 11 if ncols == 1 else 10
+        # Smaller colorbar label for single column
+        cbar_fontsize = 9 if ncols == 1 else 10
         cbar.set_label("Signal Intensity", fontsize=cbar_fontsize)
+
+    # Much tighter layout for single column
+    if ncols == 1:
+        plt.tight_layout(rect=[0, 0, 1, 1], pad=0.5)
+    else:
+        plt.tight_layout(rect=[0, 0, 1, 1], pad=1.0)
 
     return fig
 
