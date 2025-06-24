@@ -445,8 +445,8 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     nrows = len(valid_beds)
     ncols = len(bigwig_names)
     
-    # Standard optimized figure sizing
-    fig_width = 3 * ncols + 1.5  # Width per column: 3 inches + space for colorbar
+    # Standard optimized figure sizing with space for individual colorbars
+    fig_width = 3 * ncols + 1.0  # Width per column: 3 inches + space for individual colorbars
     fig_height = 5 * nrows + 0.5  # Height per row: 5 inches + padding
     
     # Apply reasonable limits
@@ -455,15 +455,12 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     
     fig = plt.figure(figsize=(fig_width, fig_height))
     
-    # Grid spacing optimized for standard settings
-    if ncols == 1:
-        gs = GridSpec(nrows, 2, width_ratios=[3, 0.3], 
-                     wspace=0.1, hspace=0.2)
-    else:
-        gs = GridSpec(nrows, ncols + 1, width_ratios=[3] * ncols + [0.3], 
-                     wspace=0.15, hspace=0.3)
+    # Grid spacing optimized for individual colorbars per row
+    gs = GridSpec(nrows, ncols + 1, width_ratios=[3] * ncols + [0.3], 
+                 wspace=0.15, hspace=0.3)
 
-    im = None 
+    # Store images for individual colorbars per row
+    row_images = {}
 
     for row_idx, (custom_bed_name, original_bed_name) in enumerate(valid_beds):
         ref_matrix = profile_data[0][original_bed_name]['all_profiles']
@@ -483,13 +480,8 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 ax.set_title(bw_name, fontweight='bold', fontsize=title_fontsize)
 
             if col_idx == 0:
-                # Use standard font size for BED names
-                display_name = custom_bed_name
-                # Truncate long names for readability
-                if len(display_name) > 20:
-                    display_name = display_name[:17] + "..."
-                    
-                ax.set_ylabel(display_name, fontweight='bold', fontsize=bed_font_size)
+                # Use full BED name without truncation
+                ax.set_ylabel(custom_bed_name, fontweight='bold', fontsize=bed_font_size)
             
             if not (col_idx < len(profile_data) and original_bed_name in profile_data[col_idx] and profile_data[col_idx][original_bed_name]):
                 ax.text(0.5, 0.5, "No Data", ha='center', va='center')
@@ -501,6 +493,10 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 
                 im = ax.imshow(matrix, aspect='auto', interpolation='none', 
                               cmap=cmap, vmin=vmin, vmax=vmax)
+                
+                # Store the image for this row (use the first valid image from each row)
+                if row_idx not in row_images:
+                    row_images[row_idx] = im
                 
                 # Standard annotation font size
                 annotation_fontsize = 4
@@ -524,12 +520,19 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
             else:
                 ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
 
-    # Add colorbar
-    if im:
-        cbar_ax = fig.add_subplot(gs[:, -1])
-        cbar = fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
-        cbar_fontsize = 6
-        cbar.set_label("Signal Intensity", fontsize=cbar_fontsize)
+    # Add individual colorbar for each row
+    for row_idx in range(nrows):
+        if row_idx in row_images:
+            cbar_ax = fig.add_subplot(gs[row_idx, -1])
+            cbar = fig.colorbar(row_images[row_idx], cax=cbar_ax)
+            cbar_fontsize = 6
+            
+            # Only add label to the middle colorbar to avoid clutter
+            if row_idx == nrows // 2:
+                cbar.set_label("Signal Intensity", fontsize=cbar_fontsize)
+            
+            # Make colorbar tick labels smaller
+            cbar.ax.tick_params(labelsize=4)
 
     # Standard layout padding
     plt.tight_layout(rect=[0, 0, 1, 1], pad=0.5)
