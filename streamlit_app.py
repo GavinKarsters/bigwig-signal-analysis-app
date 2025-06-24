@@ -592,7 +592,7 @@ def main():
             else:
                 default_cmap, default_sort, default_vmin, default_vmax = 'viridis', True, 0.0, 10.0
             
-            cmap_options = ['viridis', 'coolwarm', 'Reds', 'Blues', 'YlGnBu', 'magma']
+            cmap_options = ['RdBu','viridis', 'coolwarm', 'Reds', 'Blues', 'YlGnBu', 'magma']
             cmap_index = cmap_options.index(default_cmap) if default_cmap in cmap_options else 0
             cmap_choice = st.selectbox("Colormap:", cmap_options, index=cmap_index)
             sort_regions = st.checkbox("Sort regions by mean signal (using 1st sample as reference)", value=bool(default_sort))
