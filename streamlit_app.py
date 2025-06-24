@@ -455,7 +455,7 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
             fig_width, fig_height = 5, 5
         else:
             # Multiple BED files, single BigWig - stack vertically
-            fig_width = 8
+            fig_width = 6
             fig_height = min(4 * nrows, 16)  # Max height of 16
     elif nrows == 1:
         # Single BED file, multiple BigWigs - arrange horizontally but limit width
@@ -470,9 +470,14 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     
     # Adjust grid spacing and ratios based on layout
     if ncols == 1:
-        # Single column - colorbar takes less relative space
-        gs = GridSpec(nrows, 2, width_ratios=[6, 0.3], 
-                     wspace=0.1, hspace=0.3)
+        if nrows == 1:
+            # Single heatmap - make it more square
+            gs = GridSpec(1, 2, width_ratios=[3, 0.3], 
+                         wspace=0.15, hspace=0.3)
+        else:
+            # Multiple rows, single column
+            gs = GridSpec(nrows, 2, width_ratios=[4, 0.3], 
+                         wspace=0.1, hspace=0.3)
     elif nrows == 1:
         # Single row - adjust spacing between columns
         gs = GridSpec(1, ncols + 1, width_ratios=[5] * ncols + [0.3], 
@@ -512,8 +517,13 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 p_data = profile_data[col_idx][original_bed_name]
                 matrix = p_data['all_profiles'][sorted_indices, :]
                 
-                im = ax.imshow(matrix, aspect='auto', interpolation='none', 
-                              cmap=cmap, vmin=vmin, vmax=vmax)
+                # For single heatmap, you might want to control the aspect ratio more directly
+                if ncols == 1 and nrows == 1:
+                    im = ax.imshow(matrix, aspect='auto', interpolation='none', 
+                                  cmap=cmap, vmin=vmin, vmax=vmax)
+                else:
+                    im = ax.imshow(matrix, aspect='auto', interpolation='none', 
+                                  cmap=cmap, vmin=vmin, vmax=vmax)
                 
                 # Adjust annotation font size
                 annotation_fontsize = 10 if ncols == 1 else (9 if ncols <= 2 else 8)
@@ -539,20 +549,13 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
 
     # Add colorbar with appropriate positioning
     if im:
-        if ncols == 1:
-            # For single column, colorbar goes in the second column
-            cbar_ax = fig.add_subplot(gs[:, 1])
-        else:
-            # For multiple columns, colorbar goes in the last column
-            cbar_ax = fig.add_subplot(gs[:, -1])
-        
+        cbar_ax = fig.add_subplot(gs[:, -1])
         cbar = fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
         # Adjust colorbar label font size
         cbar_fontsize = 11 if ncols == 1 else 10
         cbar.set_label("Signal Intensity", fontsize=cbar_fontsize)
 
     return fig
-
 
 def main():
     st.title("📊 BigWig Signal Analysis Tool")
