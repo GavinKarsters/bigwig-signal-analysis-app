@@ -104,8 +104,7 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
                 'Analysis Date', 'BigWig Files (Upload Order)', 'BED Files (Upload Order)',
                 'BigWig Groups', 'Plot Type', 'Y-axis Maximum', 'Signal Window (bp)',
                 'Max Regions per BED', 'Line Plot Extend (bp)', 'Line Plot Bin Size (bp)',
-                'Heatmap Colormap', 'Heatmap Sort Regions', 'Heatmap Color Min', 'Heatmap Color Max',
-                'Heatmap Width per Column', 'Heatmap Height per Row', 'BED Font Size'
+                'Heatmap Colormap', 'Heatmap Sort Regions', 'Heatmap Color Min', 'Heatmap Color Max'
             ],
             'Value': [
                 pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -115,9 +114,7 @@ def export_signal_data_to_excel(signals_data, profile_data, group_names, bed_nam
                 analysis_params.get('max_regions', 'Unknown'), analysis_params.get('line_extend', 2000),
                 analysis_params.get('line_bin_size', 20),
                 analysis_params.get('cmap', 'viridis'), analysis_params.get('sort_regions', True),
-                analysis_params.get('vmin', 0.0), analysis_params.get('vmax', 10.0),
-                analysis_params.get('heatmap_width', 4.0), analysis_params.get('heatmap_height_per_row', 3.0),
-                analysis_params.get('bed_font_size', 10)
+                analysis_params.get('vmin', 0.0), analysis_params.get('vmax', 10.0)
             ]
         }
         
@@ -185,10 +182,7 @@ def load_signal_data_from_excel(uploaded_file):
             'cmap': metadata_dict.get('Heatmap Colormap', 'viridis'),
             'sort_regions': bool(metadata_dict.get('Heatmap Sort Regions', True)),
             'vmin': float(metadata_dict.get('Heatmap Color Min', 0.0)),
-            'vmax': float(metadata_dict.get('Heatmap Color Max', 10.0)),
-            'heatmap_width': float(metadata_dict.get('Heatmap Width per Column', 4.0)),
-            'heatmap_height_per_row': float(metadata_dict.get('Heatmap Height per Row', 3.0)),
-            'bed_font_size': int(metadata_dict.get('BED Font Size', 10))
+            'vmax': float(metadata_dict.get('Heatmap Color Max', 10.0))
         }
         
         signals_data = None
@@ -435,8 +429,7 @@ def create_subplot_line_plot(profile_dict_list, bigwig_names, bed_names_ordered,
     return fig
 
 def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_bed_names=None,
-                               cmap='viridis', sort_regions=True, vmin=0.0, vmax=10.0,
-                               width_per_col=4.0, height_per_row=3.0, bed_font_size=10):
+                               cmap='viridis', sort_regions=True, vmin=0.0, vmax=10.0):
     if not profile_data or not profile_data[0]:
         return None
 
@@ -452,27 +445,23 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     nrows = len(valid_beds)
     ncols = len(bigwig_names)
     
-    # User-controlled figure sizing
-    fig_width = width_per_col * ncols + 1.5  # Add space for colorbar
-    fig_height = height_per_row * nrows + 0.5  # Add small padding
+    # Standard optimized figure sizing
+    fig_width = 3 * ncols + 1.5  # Width per column: 3 inches + space for colorbar
+    fig_height = 5 * nrows + 0.5  # Height per row: 5 inches + padding
     
-    # Apply reasonable limits to prevent extreme sizes
-    fig_width = min(max(fig_width, 4), 25)  # Between 4 and 25 inches
-    fig_height = min(max(fig_height, 3), 20)  # Between 3 and 20 inches
+    # Apply reasonable limits
+    fig_width = min(max(fig_width, 4), 25)
+    fig_height = min(max(fig_height, 3), 20)
     
     fig = plt.figure(figsize=(fig_width, fig_height))
     
-    # Adjust spacing based on user settings
+    # Grid spacing optimized for standard settings
     if ncols == 1:
-        # Single column
-        colorbar_width_ratio = min(0.4, width_per_col * 0.1)  # Scale colorbar with width
-        gs = GridSpec(nrows, 2, width_ratios=[width_per_col, colorbar_width_ratio], 
-                     wspace=0.1, hspace=max(0.1, 0.3 - (bed_font_size - 10) * 0.02))
+        gs = GridSpec(nrows, 2, width_ratios=[3, 0.3], 
+                     wspace=0.1, hspace=0.2)
     else:
-        # Multiple columns
-        colorbar_width_ratio = 0.3
-        gs = GridSpec(nrows, ncols + 1, width_ratios=[width_per_col] * ncols + [colorbar_width_ratio], 
-                     wspace=0.15, hspace=max(0.2, 0.4 - (bed_font_size - 10) * 0.02))
+        gs = GridSpec(nrows, ncols + 1, width_ratios=[3] * ncols + [0.3], 
+                     wspace=0.15, hspace=0.3)
 
     im = None 
 
@@ -486,20 +475,19 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         for col_idx, bw_name in enumerate(bigwig_names):
             ax = fig.add_subplot(gs[row_idx, col_idx])
 
-            # Scale other font sizes relative to bed_font_size
-            title_fontsize = max(8, bed_font_size + 1)
+            # Standard font sizes
+            title_fontsize = 8
+            bed_font_size = 6  # Standard BED label font size
             
             if row_idx == 0:
                 ax.set_title(bw_name, fontweight='bold', fontsize=title_fontsize)
 
             if col_idx == 0:
-                # Use user-specified font size for BED names
+                # Use standard font size for BED names
                 display_name = custom_bed_name
-                # Optionally truncate if font is small and name is long
-                if bed_font_size < 9 and len(display_name) > 20:
+                # Truncate long names for readability
+                if len(display_name) > 20:
                     display_name = display_name[:17] + "..."
-                elif bed_font_size < 11 and len(display_name) > 25:
-                    display_name = display_name[:22] + "..."
                     
                 ax.set_ylabel(display_name, fontweight='bold', fontsize=bed_font_size)
             
@@ -514,8 +502,8 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 im = ax.imshow(matrix, aspect='auto', interpolation='none', 
                               cmap=cmap, vmin=vmin, vmax=vmax)
                 
-                # Scale annotation font with bed_font_size
-                annotation_fontsize = max(6, bed_font_size - 2)
+                # Standard annotation font size
+                annotation_fontsize = 4
                 ax.text(0.02, 0.98, f"n={p_data['n_regions']}", 
                        transform=ax.transAxes, ha='left', va='top', 
                        fontsize=annotation_fontsize, 
@@ -528,9 +516,9 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
                 tick_labels = [f'{int(positions[int(p)]/1000)}kb' if positions[int(p)] != 0 else '0' for p in tick_pos]
                 ax.set_xticks(tick_pos)
                 
-                # Scale tick and label fonts
-                tick_fontsize = max(6, bed_font_size - 1)
-                xlabel_fontsize = max(8, bed_font_size)
+                # Standard tick and label font sizes
+                tick_fontsize = 5
+                xlabel_fontsize = 6
                 ax.set_xticklabels(tick_labels, fontsize=tick_fontsize)
                 ax.set_xlabel("Distance from Center", fontsize=xlabel_fontsize)
             else:
@@ -540,12 +528,11 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
     if im:
         cbar_ax = fig.add_subplot(gs[:, -1])
         cbar = fig.colorbar(im, cax=cbar_ax, label="Signal Intensity")
-        cbar_fontsize = max(8, bed_font_size)
+        cbar_fontsize = 6
         cbar.set_label("Signal Intensity", fontsize=cbar_fontsize)
 
-    # Adjust layout based on dimensions
-    pad_amount = max(0.3, min(1.0, height_per_row * 0.2))
-    plt.tight_layout(rect=[0, 0, 1, 1], pad=pad_amount)
+    # Standard layout padding
+    plt.tight_layout(rect=[0, 0, 1, 1], pad=0.5)
 
     return fig
 
@@ -595,19 +582,12 @@ def main():
 
         if plot_type in ["Heatmap", "All"]:
             st.subheader("Heatmap Settings")
-            
-            # Load defaults from pre-extracted data if available
             if pre_extracted_data:
                 params = pre_extracted_data['analysis_params']
                 default_cmap, default_sort = params.get('cmap', 'viridis'), params.get('sort_regions', True)
                 default_vmin, default_vmax = params.get('vmin', 0.0), params.get('vmax', 10.0)
-                # New defaults for custom controls
-                default_heatmap_width = params.get('heatmap_width', 4.0)
-                default_heatmap_height = params.get('heatmap_height_per_row', 3.0)
-                default_bed_font_size = params.get('bed_font_size', 10)
             else:
                 default_cmap, default_sort, default_vmin, default_vmax = 'viridis', True, 0.0, 10.0
-                default_heatmap_width, default_heatmap_height, default_bed_font_size = 4.0, 3.0, 10
             
             cmap_options = ['viridis', 'coolwarm', 'Reds', 'Blues', 'YlGnBu', 'magma']
             cmap_index = cmap_options.index(default_cmap) if default_cmap in cmap_options else 0
@@ -615,24 +595,6 @@ def main():
             sort_regions = st.checkbox("Sort regions by mean signal (using 1st sample as reference)", value=bool(default_sort))
             vmin = st.number_input("Color scale min:", value=float(default_vmin), format="%.2f")
             vmax = st.number_input("Color scale max:", value=float(default_vmax), format="%.2f")
-            
-            # New custom dimension and font controls
-            st.markdown("**📏 Custom Dimensions & Fonts**")
-            heatmap_width_per_col = st.number_input(
-                "Width per column (inches):", 
-                min_value=2.0, max_value=10.0, value=float(default_heatmap_width), step=0.5,
-                help="Controls how wide each heatmap column is. Smaller values = more compact."
-            )
-            heatmap_height_per_row = st.number_input(
-                "Height per row (inches):", 
-                min_value=1.5, max_value=6.0, value=float(default_heatmap_height), step=0.5,
-                help="Controls how tall each heatmap row is. Smaller values = more compact."
-            )
-            bed_font_size = st.number_input(
-                "BED file label font size:", 
-                min_value=6, max_value=16, value=int(default_bed_font_size), step=1,
-                help="Font size for BED file names on y-axis. Smaller = less overlap."
-            )
 
         st.subheader("Export Settings")
         export_format = st.selectbox("Export format:", ["PNG", "PDF"])
@@ -663,13 +625,7 @@ def main():
         
         if plot_type in ["Heatmap", "All"] and profile_data:
             st.subheader("🔥 Consolidated Heatmap Comparison")
-            fig = create_comparison_heatmaps(
-                profile_data, custom_bigwig_names, custom_bed_names, original_bed_names, 
-                cmap_choice, sort_regions, vmin, vmax,
-                width_per_col=heatmap_width_per_col, 
-                height_per_row=heatmap_height_per_row, 
-                bed_font_size=bed_font_size
-            )
+            fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names, cmap_choice, sort_regions, vmin, vmax)
             if fig:
                 st.pyplot(fig)
                 f_data, f_name, f_mime = export_plot_with_format(fig, "consolidated_heatmap", export_format)
@@ -758,11 +714,7 @@ def main():
                     'analysis_params': {
                         'plot_type': plot_type, 'y_max': y_max, 'extend_bp': extend_bp, 'max_regions': max_regions,
                         'line_extend': 2000, 'line_bin_size': 20, 'cmap': cmap_choice, 'sort_regions': sort_regions,
-                        'vmin': vmin, 'vmax': vmax,
-                        # New heatmap customization parameters
-                        'heatmap_width': heatmap_width_per_col,
-                        'heatmap_height_per_row': heatmap_height_per_row,
-                        'bed_font_size': bed_font_size
+                        'vmin': vmin, 'vmax': vmax
                     }
                 }
 
@@ -805,10 +757,7 @@ def main():
             st.subheader("🔥 Consolidated Heatmap Comparison")
             fig = create_comparison_heatmaps(
                 analysis_data['profile_data'], custom_bigwig_names, custom_bed_names, None, 
-                cmap_choice, sort_regions, vmin, vmax,
-                width_per_col=heatmap_width_per_col, 
-                height_per_row=heatmap_height_per_row, 
-                bed_font_size=bed_font_size
+                cmap_choice, sort_regions, vmin, vmax
             )
             if fig:
                 st.pyplot(fig)
