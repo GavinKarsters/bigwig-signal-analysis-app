@@ -1,6 +1,6 @@
 # BigWig Signal Analysis Tool
 
-An interactive Streamlit web application for analyzing ChIP-seq signal data from BigWig files across genomic regions defined in BED files.
+An interactive Streamlit web application for analyzing signal data from BigWig files across genomic regions defined in BED files.
 
 ## Live App
 
