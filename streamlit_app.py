@@ -452,7 +452,7 @@ def create_comparison_heatmaps(profile_data, bigwig_names, bed_names, original_b
         # Single BigWig - make it narrower and taller
         if nrows == 1:
             # Single heatmap
-            fig_width, fig_height = 8, 6
+            fig_width, fig_height = 5, 5
         else:
             # Multiple BED files, single BigWig - stack vertically
             fig_width = 8
