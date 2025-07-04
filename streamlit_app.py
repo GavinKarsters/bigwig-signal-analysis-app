@@ -76,96 +76,78 @@ def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
         return custom_bigwig_names, custom_bed_names
 
 def setup_file_ordering(group_names, bed_names_ordered, mode="new_analysis"):
-    """Setup UI for reordering BigWig groups and BED files"""
+    """Setup UI for reordering BigWig groups and BED files using selectboxes"""
     
     with st.expander("🔄 Reorder Files for Plots", expanded=False):
-        st.info("Drag and drop to reorder files as they will appear in the plots.")
+        st.info("Change the order in which files appear in plots by selecting the desired order below.")
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.subheader("BigWig Group Order")
-            # Create a list of options with indices for tracking
-            bigwig_options = [f"{i+1}. {name}" for i, name in enumerate(group_names)]
+            st.write("**Current order:**")
+            for i, name in enumerate(group_names):
+                st.write(f"{i+1}. {name}")
             
-            # Use session state to maintain order
+            # Initialize session state for BigWig order
             if f"{mode}_bigwig_order" not in st.session_state:
                 st.session_state[f"{mode}_bigwig_order"] = list(range(len(group_names)))
             
-            # Create selectbox for each position
-            new_bigwig_order = []
-            used_indices = set()
-            
-            for pos in range(len(group_names)):
-                # Filter out already used options
-                available_options = [opt for i, opt in enumerate(bigwig_options) if i not in used_indices]
-                available_indices = [i for i in range(len(group_names)) if i not in used_indices]
-                
-                if not available_options:
-                    break
-                
-                # Try to maintain previous selection if possible
-                default_idx = 0
-                if pos < len(st.session_state[f"{mode}_bigwig_order"]):
-                    prev_selection = st.session_state[f"{mode}_bigwig_order"][pos]
-                    if prev_selection in available_indices:
-                        default_idx = available_indices.index(prev_selection)
-                
-                selected_option = st.selectbox(
-                    f"Position {pos+1}:",
-                    available_options,
-                    index=default_idx,
-                    key=f"{mode}_bigwig_pos_{pos}"
+            # Create number inputs for each position
+            st.write("**Set new order (1 = first, 2 = second, etc.):**")
+            new_order = []
+            for i, name in enumerate(group_names):
+                current_pos = st.session_state[f"{mode}_bigwig_order"].index(i) + 1 if i in st.session_state[f"{mode}_bigwig_order"] else i + 1
+                new_pos = st.number_input(
+                    f"{name}:",
+                    min_value=1,
+                    max_value=len(group_names),
+                    value=current_pos,
+                    key=f"{mode}_bigwig_order_{i}"
                 )
-                
-                # Extract the index from the selected option
-                selected_idx = int(selected_option.split('.')[0]) - 1
-                new_bigwig_order.append(selected_idx)
-                used_indices.add(selected_idx)
+                new_order.append((new_pos - 1, i))  # Convert to 0-based index
             
-            st.session_state[f"{mode}_bigwig_order"] = new_bigwig_order
+            # Sort by new position and extract the file indices
+            new_order.sort()
+            st.session_state[f"{mode}_bigwig_order"] = [file_idx for _, file_idx in new_order]
+            
+            # Show preview of new order
+            st.write("**New order preview:**")
+            for pos, file_idx in enumerate(new_order):
+                st.write(f"{pos+1}. {group_names[file_idx[1]]}")
         
         with col2:
             st.subheader("BED File Order")
-            # Create a list of options with indices for tracking
-            bed_options = [f"{i+1}. {name}" for i, name in enumerate(bed_names_ordered)]
+            st.write("**Current order:**")
+            for i, name in enumerate(bed_names_ordered):
+                st.write(f"{i+1}. {name}")
             
-            # Use session state to maintain order
+            # Initialize session state for BED order
             if f"{mode}_bed_order" not in st.session_state:
                 st.session_state[f"{mode}_bed_order"] = list(range(len(bed_names_ordered)))
             
-            # Create selectbox for each position
-            new_bed_order = []
-            used_indices = set()
-            
-            for pos in range(len(bed_names_ordered)):
-                # Filter out already used options
-                available_options = [opt for i, opt in enumerate(bed_options) if i not in used_indices]
-                available_indices = [i for i in range(len(bed_names_ordered)) if i not in used_indices]
-                
-                if not available_options:
-                    break
-                
-                # Try to maintain previous selection if possible
-                default_idx = 0
-                if pos < len(st.session_state[f"{mode}_bed_order"]):
-                    prev_selection = st.session_state[f"{mode}_bed_order"][pos]
-                    if prev_selection in available_indices:
-                        default_idx = available_indices.index(prev_selection)
-                
-                selected_option = st.selectbox(
-                    f"Position {pos+1}:",
-                    available_options,
-                    index=default_idx,
-                    key=f"{mode}_bed_pos_{pos}"
+            # Create number inputs for each position
+            st.write("**Set new order (1 = first, 2 = second, etc.):**")
+            new_order = []
+            for i, name in enumerate(bed_names_ordered):
+                current_pos = st.session_state[f"{mode}_bed_order"].index(i) + 1 if i in st.session_state[f"{mode}_bed_order"] else i + 1
+                new_pos = st.number_input(
+                    f"{name}:",
+                    min_value=1,
+                    max_value=len(bed_names_ordered),
+                    value=current_pos,
+                    key=f"{mode}_bed_order_{i}"
                 )
-                
-                # Extract the index from the selected option
-                selected_idx = int(selected_option.split('.')[0]) - 1
-                new_bed_order.append(selected_idx)
-                used_indices.add(selected_idx)
+                new_order.append((new_pos - 1, i))  # Convert to 0-based index
             
-            st.session_state[f"{mode}_bed_order"] = new_bed_order
+            # Sort by new position and extract the file indices
+            new_order.sort()
+            st.session_state[f"{mode}_bed_order"] = [file_idx for _, file_idx in new_order]
+            
+            # Show preview of new order
+            st.write("**New order preview:**")
+            for pos, file_idx in enumerate(new_order):
+                st.write(f"{pos+1}. {bed_names_ordered[file_idx[1]]}")
         
         # Apply the reordering
         reordered_group_names = [group_names[i] for i in st.session_state[f"{mode}_bigwig_order"]]
@@ -800,6 +782,17 @@ def main():
     with col2:
         st.subheader("📄 Upload BED Files")
         bed_files = st.file_uploader("Choose .bed files", type=['bed'], accept_multiple_files=True, disabled=st.session_state.analysis_running)
+
+    # Show reordering options after files are uploaded
+    if bigwig_files and bed_files and replicate_groups:
+        group_names = [Path(bigwig_files[g[0]].name).stem if len(g) == 1 else f"{Path(bigwig_files[g[0]].name).stem}_group" for g in replicate_groups]
+        bed_names_ordered = [Path(f.name).stem for f in bed_files]
+        
+        reordered_group_names, reordered_bed_names, bigwig_order, bed_order = setup_file_ordering(
+            group_names, 
+            bed_names_ordered, 
+            mode="new_analysis"
+        )
 
     # Clear previous analysis results when new files are uploaded
     if bigwig_files or bed_files:
