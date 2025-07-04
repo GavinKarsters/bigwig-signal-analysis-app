@@ -44,7 +44,7 @@ def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
                 custom_name = st.text_input(
                     f"Group {i+1}:",
                     value=name,
-                    key=f"{mode}_bigwig_name_{i}",
+                    key=f"{mode}_custom_bigwig_name_{i}",
                     help=f"Original: {name}"
                 )
                 clean_name = custom_name.strip() if custom_name else name
@@ -59,7 +59,7 @@ def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
                 custom_name = st.text_input(
                     f"BED {i+1}:",
                     value=name,
-                    key=f"{mode}_bed_name_{i}",
+                    key=f"{mode}_custom_bed_name_{i}",
                     help=f"Original: {name}"
                 )
                 clean_name = custom_name.strip() if custom_name else name
@@ -75,11 +75,14 @@ def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
         
         return custom_bigwig_names, custom_bed_names
 
-def setup_file_ordering(group_names, bed_names_ordered, mode="new_analysis"):
-    """Setup UI for reordering BigWig groups and BED files using selectboxes"""
+def setup_file_ordering(group_names, bed_names_ordered, mode="new_analysis", unique_id=""):
+    """Setup UI for reordering BigWig groups and BED files using number inputs"""
+    
+    # Create unique keys by combining mode and unique_id
+    key_prefix = f"{mode}_{unique_id}" if unique_id else mode
     
     with st.expander("🔄 Reorder Files for Plots", expanded=False):
-        st.info("Change the order in which files appear in plots by selecting the desired order below.")
+        st.info("Change the order in which files appear in plots by setting position numbers below.")
         
         col1, col2 = st.columns(2)
         
@@ -90,31 +93,32 @@ def setup_file_ordering(group_names, bed_names_ordered, mode="new_analysis"):
                 st.write(f"{i+1}. {name}")
             
             # Initialize session state for BigWig order
-            if f"{mode}_bigwig_order" not in st.session_state:
-                st.session_state[f"{mode}_bigwig_order"] = list(range(len(group_names)))
+            order_key = f"{key_prefix}_bigwig_order"
+            if order_key not in st.session_state:
+                st.session_state[order_key] = list(range(len(group_names)))
             
             # Create number inputs for each position
             st.write("**Set new order (1 = first, 2 = second, etc.):**")
-            new_order = []
+            new_positions = {}
             for i, name in enumerate(group_names):
-                current_pos = st.session_state[f"{mode}_bigwig_order"].index(i) + 1 if i in st.session_state[f"{mode}_bigwig_order"] else i + 1
+                current_pos = st.session_state[order_key].index(i) + 1 if i in st.session_state[order_key] else i + 1
                 new_pos = st.number_input(
                     f"{name}:",
                     min_value=1,
                     max_value=len(group_names),
                     value=current_pos,
-                    key=f"{mode}_bigwig_order_{i}"
+                    key=f"{key_prefix}_bigwig_pos_{i}"
                 )
-                new_order.append((new_pos - 1, i))  # Convert to 0-based index
+                new_positions[i] = new_pos - 1  # Convert to 0-based index
             
             # Sort by new position and extract the file indices
-            new_order.sort()
-            st.session_state[f"{mode}_bigwig_order"] = [file_idx for _, file_idx in new_order]
+            sorted_items = sorted(new_positions.items(), key=lambda x: x[1])
+            st.session_state[order_key] = [item[0] for item in sorted_items]
             
             # Show preview of new order
             st.write("**New order preview:**")
-            for pos, file_idx in enumerate(new_order):
-                st.write(f"{pos+1}. {group_names[file_idx[1]]}")
+            for pos, file_idx in enumerate(st.session_state[order_key]):
+                st.write(f"{pos+1}. {group_names[file_idx]}")
         
         with col2:
             st.subheader("BED File Order")
@@ -123,37 +127,38 @@ def setup_file_ordering(group_names, bed_names_ordered, mode="new_analysis"):
                 st.write(f"{i+1}. {name}")
             
             # Initialize session state for BED order
-            if f"{mode}_bed_order" not in st.session_state:
-                st.session_state[f"{mode}_bed_order"] = list(range(len(bed_names_ordered)))
+            bed_order_key = f"{key_prefix}_bed_order"
+            if bed_order_key not in st.session_state:
+                st.session_state[bed_order_key] = list(range(len(bed_names_ordered)))
             
             # Create number inputs for each position
             st.write("**Set new order (1 = first, 2 = second, etc.):**")
-            new_order = []
+            new_positions = {}
             for i, name in enumerate(bed_names_ordered):
-                current_pos = st.session_state[f"{mode}_bed_order"].index(i) + 1 if i in st.session_state[f"{mode}_bed_order"] else i + 1
+                current_pos = st.session_state[bed_order_key].index(i) + 1 if i in st.session_state[bed_order_key] else i + 1
                 new_pos = st.number_input(
                     f"{name}:",
                     min_value=1,
                     max_value=len(bed_names_ordered),
                     value=current_pos,
-                    key=f"{mode}_bed_order_{i}"
+                    key=f"{key_prefix}_bed_pos_{i}"
                 )
-                new_order.append((new_pos - 1, i))  # Convert to 0-based index
+                new_positions[i] = new_pos - 1  # Convert to 0-based index
             
             # Sort by new position and extract the file indices
-            new_order.sort()
-            st.session_state[f"{mode}_bed_order"] = [file_idx for _, file_idx in new_order]
+            sorted_items = sorted(new_positions.items(), key=lambda x: x[1])
+            st.session_state[bed_order_key] = [item[0] for item in sorted_items]
             
             # Show preview of new order
             st.write("**New order preview:**")
-            for pos, file_idx in enumerate(new_order):
-                st.write(f"{pos+1}. {bed_names_ordered[file_idx[1]]}")
+            for pos, file_idx in enumerate(st.session_state[bed_order_key]):
+                st.write(f"{pos+1}. {bed_names_ordered[file_idx]}")
         
         # Apply the reordering
-        reordered_group_names = [group_names[i] for i in st.session_state[f"{mode}_bigwig_order"]]
-        reordered_bed_names = [bed_names_ordered[i] for i in st.session_state[f"{mode}_bed_order"]]
+        reordered_group_names = [group_names[i] for i in st.session_state[order_key]]
+        reordered_bed_names = [bed_names_ordered[i] for i in st.session_state[bed_order_key]]
         
-        return reordered_group_names, reordered_bed_names, st.session_state[f"{mode}_bigwig_order"], st.session_state[f"{mode}_bed_order"]
+        return reordered_group_names, reordered_bed_names, st.session_state[order_key], st.session_state[bed_order_key]
 
 def export_plot_with_format(fig, base_filename, format_type):
     """Export plot in specified format without losing the figure"""
@@ -711,7 +716,8 @@ def main():
         reordered_group_names, reordered_bed_names, bigwig_order, bed_order = setup_file_ordering(
             pre_extracted_data['group_names'], 
             pre_extracted_data['bed_names_ordered'], 
-            mode="imported"
+            mode="imported",
+            unique_id="pre_extracted"
         )
         
         custom_bigwig_names, custom_bed_names = setup_custom_names(
@@ -791,7 +797,8 @@ def main():
         reordered_group_names, reordered_bed_names, bigwig_order, bed_order = setup_file_ordering(
             group_names, 
             bed_names_ordered, 
-            mode="new_analysis"
+            mode="new_analysis",
+            unique_id="upload"
         )
 
     # Clear previous analysis results when new files are uploaded
@@ -870,7 +877,8 @@ def main():
         reordered_group_names, reordered_bed_names, bigwig_order, bed_order = setup_file_ordering(
             analysis_data['group_names'], 
             analysis_data['bed_names_ordered'], 
-            mode="new_analysis"
+            mode="new_analysis",
+            unique_id="results"
         )
         
         custom_bigwig_names, custom_bed_names = setup_custom_names(
