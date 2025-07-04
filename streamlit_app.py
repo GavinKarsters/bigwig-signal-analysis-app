@@ -75,6 +75,104 @@ def setup_custom_names(group_names, bed_names_ordered, mode="new_analysis"):
         
         return custom_bigwig_names, custom_bed_names
 
+def setup_file_ordering(group_names, bed_names_ordered, mode="new_analysis"):
+    """Setup UI for reordering BigWig groups and BED files"""
+    
+    with st.expander("🔄 Reorder Files for Plots", expanded=False):
+        st.info("Drag and drop to reorder files as they will appear in the plots.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("BigWig Group Order")
+            # Create a list of options with indices for tracking
+            bigwig_options = [f"{i+1}. {name}" for i, name in enumerate(group_names)]
+            
+            # Use session state to maintain order
+            if f"{mode}_bigwig_order" not in st.session_state:
+                st.session_state[f"{mode}_bigwig_order"] = list(range(len(group_names)))
+            
+            # Create selectbox for each position
+            new_bigwig_order = []
+            used_indices = set()
+            
+            for pos in range(len(group_names)):
+                # Filter out already used options
+                available_options = [opt for i, opt in enumerate(bigwig_options) if i not in used_indices]
+                available_indices = [i for i in range(len(group_names)) if i not in used_indices]
+                
+                if not available_options:
+                    break
+                
+                # Try to maintain previous selection if possible
+                default_idx = 0
+                if pos < len(st.session_state[f"{mode}_bigwig_order"]):
+                    prev_selection = st.session_state[f"{mode}_bigwig_order"][pos]
+                    if prev_selection in available_indices:
+                        default_idx = available_indices.index(prev_selection)
+                
+                selected_option = st.selectbox(
+                    f"Position {pos+1}:",
+                    available_options,
+                    index=default_idx,
+                    key=f"{mode}_bigwig_pos_{pos}"
+                )
+                
+                # Extract the index from the selected option
+                selected_idx = int(selected_option.split('.')[0]) - 1
+                new_bigwig_order.append(selected_idx)
+                used_indices.add(selected_idx)
+            
+            st.session_state[f"{mode}_bigwig_order"] = new_bigwig_order
+        
+        with col2:
+            st.subheader("BED File Order")
+            # Create a list of options with indices for tracking
+            bed_options = [f"{i+1}. {name}" for i, name in enumerate(bed_names_ordered)]
+            
+            # Use session state to maintain order
+            if f"{mode}_bed_order" not in st.session_state:
+                st.session_state[f"{mode}_bed_order"] = list(range(len(bed_names_ordered)))
+            
+            # Create selectbox for each position
+            new_bed_order = []
+            used_indices = set()
+            
+            for pos in range(len(bed_names_ordered)):
+                # Filter out already used options
+                available_options = [opt for i, opt in enumerate(bed_options) if i not in used_indices]
+                available_indices = [i for i in range(len(bed_names_ordered)) if i not in used_indices]
+                
+                if not available_options:
+                    break
+                
+                # Try to maintain previous selection if possible
+                default_idx = 0
+                if pos < len(st.session_state[f"{mode}_bed_order"]):
+                    prev_selection = st.session_state[f"{mode}_bed_order"][pos]
+                    if prev_selection in available_indices:
+                        default_idx = available_indices.index(prev_selection)
+                
+                selected_option = st.selectbox(
+                    f"Position {pos+1}:",
+                    available_options,
+                    index=default_idx,
+                    key=f"{mode}_bed_pos_{pos}"
+                )
+                
+                # Extract the index from the selected option
+                selected_idx = int(selected_option.split('.')[0]) - 1
+                new_bed_order.append(selected_idx)
+                used_indices.add(selected_idx)
+            
+            st.session_state[f"{mode}_bed_order"] = new_bed_order
+        
+        # Apply the reordering
+        reordered_group_names = [group_names[i] for i in st.session_state[f"{mode}_bigwig_order"]]
+        reordered_bed_names = [bed_names_ordered[i] for i in st.session_state[f"{mode}_bed_order"]]
+        
+        return reordered_group_names, reordered_bed_names, st.session_state[f"{mode}_bigwig_order"], st.session_state[f"{mode}_bed_order"]
+
 def export_plot_with_format(fig, base_filename, format_type):
     """Export plot in specified format without losing the figure"""
     buf = io.BytesIO()
@@ -626,15 +724,37 @@ def main():
 
     if pre_extracted_data:
         st.markdown("---"); st.header("🎨 Plot Generation from Pre-Extracted Data")
-        custom_bigwig_names, custom_bed_names = setup_custom_names(pre_extracted_data['group_names'], pre_extracted_data['bed_names_ordered'], mode="imported")
         
+        # Add file ordering functionality
+        reordered_group_names, reordered_bed_names, bigwig_order, bed_order = setup_file_ordering(
+            pre_extracted_data['group_names'], 
+            pre_extracted_data['bed_names_ordered'], 
+            mode="imported"
+        )
+        
+        custom_bigwig_names, custom_bed_names = setup_custom_names(
+            reordered_group_names, 
+            reordered_bed_names, 
+            mode="imported"
+        )
+        
+        # Reorder the data according to the selected order
         signals_data = pre_extracted_data['signals_data']
         profile_data = pre_extracted_data['profile_data']
         original_bed_names = pre_extracted_data['bed_names_ordered']
         
+        # Reorder signals_data and profile_data according to bigwig_order
+        if signals_data:
+            signals_data = [signals_data[i] for i in bigwig_order]
+        if profile_data:
+            profile_data = [profile_data[i] for i in bigwig_order]
+        
+        # Create mapping for bed names (original order to reordered)
+        original_bed_names_reordered = [original_bed_names[i] for i in bed_order]
+        
         if plot_type in ["Boxplot", "All"] and signals_data:
             st.subheader("📊 Boxplot Results")
-            fig = create_single_boxplot(signals_data[0] if len(custom_bigwig_names)==1 else signals_data, custom_bigwig_names, custom_bed_names, y_max, original_bed_names)
+            fig = create_single_boxplot(signals_data[0] if len(custom_bigwig_names)==1 else signals_data, custom_bigwig_names, custom_bed_names, y_max, original_bed_names_reordered)
             if fig:
                 st.pyplot(fig)
                 f_data, f_name, f_mime = export_plot_with_format(fig, "boxplot", export_format)
@@ -642,7 +762,7 @@ def main():
 
         if plot_type in ["Line plot", "All"] and profile_data:
             st.subheader("📈 Line Plot Results")
-            fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names)
+            fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names_reordered)
             if fig:
                 st.pyplot(fig)
                 f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format)
@@ -650,7 +770,7 @@ def main():
         
         if plot_type in ["Heatmap", "All"] and profile_data:
             st.subheader("🔥 Consolidated Heatmap Comparison")
-            fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names, cmap_choice, sort_regions, vmin, vmax)
+            fig = create_comparison_heatmaps(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names_reordered, cmap_choice, sort_regions, vmin, vmax)
             if fig:
                 st.pyplot(fig)
                 f_data, f_name, f_mime = export_plot_with_format(fig, "consolidated_heatmap", export_format)
@@ -753,35 +873,55 @@ def main():
     if st.session_state.analysis_results:
         analysis_data = st.session_state.analysis_results
         
-        custom_bigwig_names, custom_bed_names = setup_custom_names(
+        # Add file ordering functionality for new analysis
+        reordered_group_names, reordered_bed_names, bigwig_order, bed_order = setup_file_ordering(
             analysis_data['group_names'], 
             analysis_data['bed_names_ordered'], 
             mode="new_analysis"
         )
         
-        if plot_type in ["Boxplot", "All"] and analysis_data['signals_data']:
+        custom_bigwig_names, custom_bed_names = setup_custom_names(
+            reordered_group_names, 
+            reordered_bed_names, 
+            mode="new_analysis"
+        )
+        
+        # Reorder the data according to the selected order
+        signals_data = analysis_data['signals_data']
+        profile_data = analysis_data['profile_data']
+        
+        # Reorder signals_data and profile_data according to bigwig_order
+        if signals_data:
+            signals_data = [signals_data[i] for i in bigwig_order]
+        if profile_data:
+            profile_data = [profile_data[i] for i in bigwig_order]
+        
+        # Create mapping for bed names (original order to reordered)
+        original_bed_names_reordered = [analysis_data['bed_names_ordered'][i] for i in bed_order]
+        
+        if plot_type in ["Boxplot", "All"] and signals_data:
             st.subheader("📊 Boxplot Results")
             fig = create_single_boxplot(
-                analysis_data['signals_data'][0] if len(custom_bigwig_names)==1 else analysis_data['signals_data'], 
-                custom_bigwig_names, custom_bed_names, y_max
+                signals_data[0] if len(custom_bigwig_names)==1 else signals_data, 
+                custom_bigwig_names, custom_bed_names, y_max, original_bed_names_reordered
             )
             if fig:
                 st.pyplot(fig)
                 f_data, f_name, f_mime = export_plot_with_format(fig, "boxplot", export_format)
                 st.download_button(f"📥 Download Boxplot ({export_format})", f_data, f_name, f_mime, key="dl_boxplot_new")
 
-        if plot_type in ["Line plot", "All"] and analysis_data['profile_data']:
+        if plot_type in ["Line plot", "All"] and profile_data:
             st.subheader("📈 Line Plot Results")
-            fig = create_subplot_line_plot(analysis_data['profile_data'], custom_bigwig_names, custom_bed_names)
+            fig = create_subplot_line_plot(profile_data, custom_bigwig_names, custom_bed_names, original_bed_names_reordered)
             if fig:
                 st.pyplot(fig)
                 f_data, f_name, f_mime = export_plot_with_format(fig, "lineplot", export_format)
                 st.download_button(f"📥 Download Line Plot ({export_format})", f_data, f_name, f_mime, key="dl_lineplot_new")
         
-        if plot_type in ["Heatmap", "All"] and analysis_data['profile_data']:
+        if plot_type in ["Heatmap", "All"] and profile_data:
             st.subheader("🔥 Consolidated Heatmap Comparison")
             fig = create_comparison_heatmaps(
-                analysis_data['profile_data'], custom_bigwig_names, custom_bed_names, None, 
+                profile_data, custom_bigwig_names, custom_bed_names, original_bed_names_reordered, 
                 cmap_choice, sort_regions, vmin, vmax
             )
             if fig:
@@ -791,7 +931,7 @@ def main():
         
         st.header("💾 Export Signal Data")
         excel_buffer = export_signal_data_to_excel(
-            analysis_data['signals_data'], analysis_data['profile_data'], custom_bigwig_names, 
+            signals_data, profile_data, custom_bigwig_names, 
             custom_bed_names, analysis_data['bigwig_file_names'], analysis_data['analysis_params']
         )
         st.download_button(
